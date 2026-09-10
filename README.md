@@ -106,8 +106,9 @@ web-sourced set ever managed, but they are still one person with a stopwatch.
 numbers, not either one, so 100 m/s and 75 m/s both reproduce it exactly and
 there is no measurement between them. It is documented rather than papered
 over, and the way to settle it is to time the bus between two points a known
-distance apart. If you take that measurement, or any of the others, please open
-an issue. Other people's stopwatches are the only thing that closes these.
+distance apart. If you take that measurement, or any of the others, there is an
+[issue template](https://github.com/fwsoapy/fortnite-dropcalc/issues/new?template=measurement.yml)
+for it. Other people's stopwatches are the only thing that closes these.
 
 ## Credits and disclaimer
 
