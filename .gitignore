@@ -1,0 +1,17 @@
+# Built output. It is a 2 MB single file, mostly base64 map data, so every
+# rebuild would be a 2 MB diff. Build it with `npm run build`, or download it
+# from the Releases page, or just use the hosted copy on GitHub Pages.
+drop-solver.html
+
+# Full-resolution map sources. map_embed.jpg and og_map_embed.jpg are the cut
+# down versions the build actually inlines; the PNGs they came from are 10 MB
+# and nothing in the build reads them.
+map.png
+map_41.png
+og_map.png
+
+# Scratch data pulled from the API while working things out.
+pl.json
+
+node_modules/
+.DS_Store

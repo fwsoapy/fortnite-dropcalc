@@ -1,0 +1,2327 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Drop Solver</title>
+<style>
+/* ===========================================================================
+   DESIGN TOKENS - lifted from ui.html (saved shadcn / Tailwind v4 page,
+   elements.ai-sdk.dev). Read out of ui_files/*.css and confirmed against that
+   page's live computed styles.
+   ========================================================================= */
+:root{
+  --background:#0a0a0a;
+  --foreground:#fafafa;
+  --card:#171717;
+  --popover:#171717;
+  --secondary:#262626;
+  --muted:#262626;
+  --muted-foreground:#a1a1a1;
+  --accent:#262626;
+  --primary:#006bff;
+  --primary-foreground:#ffffff;
+  --destructive:#ff6467;
+  --warning:#f99c00;
+  --success:#00c758;
+  --border:rgba(255,255,255,.10);
+  --input:rgba(255,255,255,.15);
+  --ring:#737373;
+  --ghost:rgba(255,255,255,.045);
+  --ghost-hover:rgba(255,255,255,.09);
+
+  --radius:.625rem;
+  --radius-sm:calc(var(--radius) - 4px);
+  --radius-md:calc(var(--radius) - 2px);
+  --radius-lg:var(--radius);
+  --radius-xl:calc(var(--radius) + 4px);
+
+  --font-sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+
+  --shadow-sm:0 1px 2px rgba(0,0,0,.05);
+  --shadow-pop:0 8px 30px rgba(0,0,0,.55);
+
+  /* Map vectors. Route chevrons are blue rather than the old in-game cyan,
+     bright enough to hold up over both the pale desert and the dark ocean.
+     Markers stay on the UI blue. */
+  --c-route:#4da3ff;
+  --c-marker:#006bff;
+  --c-jump:#ff6467;
+  --c-dive:#ff6467;
+  --c-glide:#00c758;
+  --c-freefall:#f99c00;
+  /* Folder area highlight. Yellow so it cannot be confused with the route
+     (cyan), the markers (blue) or any flight phase. */
+  --c-area:#ffe14d;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:14px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+  -webkit-text-size-adjust:100%;
+}
+.mono,.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1}
+
+#stage{position:fixed;inset:0;overflow:hidden;background:var(--background);
+  touch-action:none;cursor:grab}
+#stage.panning{cursor:grabbing}
+#mapCanvas{position:absolute;top:0;left:0;display:block}
+#overlay{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
+#overlay .hit{pointer-events:auto;cursor:grab}
+#overlay .hit:active{cursor:grabbing}
+#overlay .swap{pointer-events:auto;cursor:pointer}
+#overlay .swap circle:nth-of-type(2){transition:filter .12s}
+#overlay .swap:hover circle:nth-of-type(2){filter:brightness(1.25)}
+
+
+.view-controls{position:fixed;top:16px;right:16px;z-index:20;
+  display:flex;flex-direction:column;gap:6px}
+.icon-btn{
+  width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--card) 88%,transparent);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  border:1px solid var(--input);border-radius:var(--radius-md);
+  color:var(--muted-foreground);cursor:pointer;transition:background .15s,color .15s;
+}
+.icon-btn:hover{background:var(--secondary);color:var(--foreground)}
+.icon-btn:active{transform:translateY(1px)}
+.icon-btn svg{width:16px;height:16px}
+
+#panel{
+  position:fixed;left:16px;bottom:16px;z-index:30;width:340px;max-width:calc(100vw - 32px);
+  background:color-mix(in srgb,var(--card) 92%,transparent);
+  -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+  border:1px solid var(--border);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow-pop);
+  max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+  /* Not overflow:hidden any more: the collapse tab has to sit outside the box. */
+  transition:transform .22s cubic-bezier(.4,0,.2,1);
+}
+.panel-head,.panel-body{min-width:0}
+#panel>.panel-head{border-radius:var(--radius-xl) var(--radius-xl) 0 0}
+/* #panel dropped overflow:hidden so the tab can sit outside it, so the last
+   child has to round its own bottom corners. */
+#panel>.panel-body{border-radius:0 0 var(--radius-xl) var(--radius-xl)}
+
+/* COLLAPSE. The panel slides left until only the tab shows, so the map gets the
+   whole window back. Transform rather than width so nothing inside reflows, and
+   it always clears because it moves by its own width plus its own inset. */
+#panel.collapsed{transform:translateX(calc(-100% - 16px))}
+
+#panelToggle{
+  position:absolute;left:100%;bottom:0;margin-left:8px;
+  width:30px;height:44px;display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--card) 92%,transparent);
+  -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+  border:1px solid var(--border);border-radius:var(--radius-md);
+  box-shadow:var(--shadow-pop);
+  color:var(--muted-foreground);cursor:pointer;
+  transition:color .12s,background .12s,transform .22s cubic-bezier(.4,0,.2,1);
+}
+#panelToggle:hover{color:var(--foreground);background:var(--secondary)}
+#panelToggle svg{transition:transform .22s cubic-bezier(.4,0,.2,1)}
+/* Chevron points left to hide, right to bring it back. */
+#panel.collapsed #panelToggle svg{transform:rotate(180deg)}
+.panel-head{padding:16px 16px 0}
+.panel-title{font-size:14px;font-weight:600;letter-spacing:-.01em}
+.panel-sub{font-size:12px;color:var(--muted-foreground);margin-top:1px}
+.panel-body{padding:16px;display:flex;flex-direction:column;gap:16px;overflow-y:auto}
+/* The body is the scroller, so children keep their natural height. Without
+   this the Calculate button squashes once results make the content tall. */
+.panel-body>*{flex-shrink:0}
+
+.field-row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}
+.field-label{font-size:13px;font-weight:500}
+.field-value{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:13px;color:var(--muted-foreground)}
+
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:16px;
+  background:transparent;cursor:pointer;
+  outline:none;                 /* kills the default focus box */
+  -webkit-tap-highlight-color:transparent;
+}
+input[type=range]:focus{outline:none}
+input[type=range]::-moz-focus-outer{border:0}
+input[type=range]::-webkit-slider-runnable-track{
+  height:6px;border-radius:999px;
+  background:linear-gradient(to right,var(--primary) var(--pct,50%),var(--secondary) var(--pct,50%));
+}
+input[type=range]::-moz-range-track{height:6px;border-radius:999px;background:var(--secondary)}
+input[type=range]::-moz-range-progress{height:6px;border-radius:999px;background:var(--primary)}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-5px;
+  background:var(--foreground);border-radius:50%;border:none;
+  box-shadow:var(--shadow-sm);transition:transform .12s,box-shadow .15s;
+}
+input[type=range]::-moz-range-thumb{
+  width:16px;height:16px;background:var(--foreground);border-radius:50%;border:none;
+  box-shadow:var(--shadow-sm);transition:transform .12s,box-shadow .15s;
+}
+input[type=range]:active::-webkit-slider-thumb{transform:scale(1.15)}
+input[type=range]:active::-moz-range-thumb{transform:scale(1.15)}
+/* Keyboard focus keeps a visible state, but as a soft ring on the thumb
+   rather than a rectangle around the control. */
+input[type=range]:focus-visible::-webkit-slider-thumb{
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--primary) 45%,transparent)}
+input[type=range]:focus-visible::-moz-range-thumb{
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--primary) 45%,transparent)}
+.range-ends{display:flex;justify-content:space-between;margin-top:4px;
+  font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground)}
+.hint{font-size:11px;line-height:1.45;color:var(--muted-foreground);margin-top:5px}
+
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:36px;padding:0 14px;border-radius:var(--radius-md);
+  font-size:14px;font-weight:500;transition:background .15s,opacity .15s}
+.btn-primary{background:var(--primary);color:var(--primary-foreground);width:100%}
+.btn-primary:hover{background:color-mix(in srgb,var(--primary) 88%,#fff)}
+.btn-primary:active{transform:translateY(1px)}
+.btn-ghost{background:var(--ghost);border:1px solid var(--input);color:var(--foreground)}
+.btn-ghost:hover{background:var(--ghost-hover)}
+.btn-sm{height:30px;padding:0 10px;font-size:12px}
+
+.sep{height:1px;background:var(--border);margin:0 -16px}
+.empty{font-size:13px;color:var(--muted-foreground);text-align:center;padding:14px 8px;
+  border:1px dashed var(--border);border-radius:var(--radius-lg)}
+
+/* Stale results stay exactly where they are and just dim. No banner, no
+   collapse, no layout shift, no recalculation. */
+#results{transition:opacity .18s}
+#results.stale{opacity:.32}
+
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:var(--secondary);border-radius:var(--radius-md);padding:9px 11px}
+.stat.full{grid-column:1/-1}
+.stat-k{font-size:11px;color:var(--muted-foreground);margin-bottom:2px}
+.stat-v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:18px;font-weight:600;letter-spacing:-.02em;line-height:1.15}
+.stat-v .u{font-size:11px;font-weight:400;color:var(--muted-foreground);margin-left:3px}
+
+.phase-list{display:flex;flex-direction:column;gap:1px;
+  background:var(--border);border:1px solid var(--border);
+  border-radius:var(--radius-md);overflow:hidden}
+.phase{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--card)}
+.phase.zero{opacity:.42}
+.phase .dot{width:7px;height:7px;border-radius:2px;flex-shrink:0}
+.phase .nm{flex:1;font-size:13px;font-weight:500}
+.phase .alt{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:11px;color:var(--muted-foreground)}
+.phase .tm{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:13px;font-weight:600;min-width:46px;text-align:right}
+
+.section-label{font-size:11px;font-weight:500;color:var(--muted-foreground);margin-bottom:7px}
+
+/* ---------- saved drops ---------- */
+.drops-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px}
+.drops-count{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:11px;color:var(--muted-foreground)}
+.drops-empty{font-size:12px;color:var(--muted-foreground);padding:2px 0 4px}
+
+/* FOLDERS. Chevron collapses, the name toggles the map area, x deletes. */
+.folder-row{display:flex;align-items:center;gap:4px;
+  padding:4px 6px 4px 4px;margin-bottom:4px;
+  background:var(--ghost);border:1px solid transparent;
+  border-radius:var(--radius-sm);color:var(--muted-foreground);
+  transition:background .15s,color .15s,border-color .15s}
+.folder-row:hover{background:var(--ghost-hover)}
+.folder-chev{width:22px;height:24px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;border-radius:var(--radius-sm);color:inherit;cursor:pointer}
+.folder-chev .chev{transition:transform .18s cubic-bezier(.4,0,.2,1);transform:rotate(90deg)}
+.folder-chev.shut .chev{transform:rotate(0deg)}
+.folder-chev:hover{background:var(--ghost-hover);color:var(--foreground)}
+.folder-name{flex:1;min-width:0;display:flex;align-items:center;height:24px;
+  padding:0 4px;text-align:left;cursor:pointer;color:inherit;
+  border-radius:var(--radius-sm)}
+.folder-name:hover{color:var(--foreground)}
+.folder-name .nm{flex:1;min-width:0;font-size:12px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder-n{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:11px;opacity:.75;padding:0 2px}
+.folder-row.on{color:var(--c-area);
+  background:color-mix(in srgb,var(--c-area) 14%,transparent);
+  border-color:color-mix(in srgb,var(--c-area) 45%,transparent)}
+/* Children indented under their folder so the grouping reads at a glance. */
+.folder-kids{padding-left:10px;
+  border-left:1px solid var(--border);margin:0 0 6px 12px}
+.loose-zone{min-height:6px;border-radius:var(--radius-sm)}
+
+/* DRAGGING a drop into a folder. */
+.drop-item{cursor:grab}
+.drop-item.dragging{opacity:.4;cursor:grabbing}
+.grip{flex-shrink:0;display:flex;align-items:center;color:var(--muted-foreground);
+  opacity:.5;margin-right:1px}
+.drop-item:hover .grip{opacity:.9}
+.folder-row.drag-over,.folder-kids.drag-over,.loose-zone.drag-over{
+  background:color-mix(in srgb,var(--primary) 16%,transparent);
+  outline:1px dashed color-mix(in srgb,var(--primary) 70%,transparent);
+  outline-offset:-1px}
+.drop-item{display:flex;align-items:center;gap:6px;padding:6px 6px 6px 9px;
+  background:var(--secondary);border-radius:var(--radius-sm);margin-bottom:4px}
+.drop-item .nm{flex:1;min-width:0;font-size:12px;font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drop-item .mini{height:24px;padding:0 9px;font-size:11px;border-radius:var(--radius-sm)}
+.drop-x{width:24px;height:24px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;border-radius:var(--radius-sm);
+  color:var(--muted-foreground);transition:background .15s,color .15s}
+.drop-x:hover{background:color-mix(in srgb,var(--destructive) 18%,transparent);
+  color:var(--destructive)}
+.save-row{display:flex;gap:6px;margin-top:8px}
+.save-row input{flex:1;min-width:0}
+.save-row button:disabled,.save-row input:disabled{opacity:.45;cursor:not-allowed}
+.note{font-size:12px;line-height:1.5;padding:9px 11px;border-radius:var(--radius-md);
+  border:1px solid var(--border);background:var(--secondary);color:var(--muted-foreground)}
+.note.warn{border-color:color-mix(in srgb,var(--warning) 35%,transparent);
+  background:color-mix(in srgb,var(--warning) 9%,transparent);color:var(--warning)}
+.note.err{border-color:color-mix(in srgb,var(--destructive) 35%,transparent);
+  background:color-mix(in srgb,var(--destructive) 9%,transparent);color:var(--destructive)}
+.note b{color:var(--foreground);font-weight:600}
+.note.err b,.note.warn b{color:inherit}
+
+input[type=text]{width:100%;height:32px;padding:0 9px;background:var(--ghost);
+  border:1px solid var(--input);border-radius:var(--radius-sm);
+  color:var(--foreground);font-family:var(--font-sans);font-size:12px}
+/* Scoped to text fields only. A bare input:focus also matched the range slider
+   and drew a 3px box right around it. */
+input[type=text]:focus{outline:none;border-color:var(--ring);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 30%,transparent)}
+
+/* MODE PICKER, BUILT RATHER THAN NATIVE.
+
+   A <select> renders its popup with the operating system's own colours, which
+   here meant a white list inheriting the theme's near-white text: every row
+   except the highlighted one was invisible. There is no CSS fix for that, the
+   popup is not ours to style, so the list is a real element. */
+.dd-btn{width:100%;height:32px;padding:0 9px;display:flex;align-items:center;
+  justify-content:space-between;gap:8px;cursor:pointer;
+  background:var(--ghost);border:1px solid var(--input);
+  border-radius:var(--radius-sm);color:var(--foreground);
+  font-family:var(--font-sans);font-size:12px;font-weight:500;text-align:left;
+  transition:border-color .12s,background .12s}
+.dd-btn:hover{background:var(--ghost-hover)}
+.dd-btn[aria-expanded="true"]{border-color:var(--ring)}
+.dd-chev{flex-shrink:0;color:var(--muted-foreground);
+  transition:transform .18s cubic-bezier(.4,0,.2,1)}
+.dd-btn[aria-expanded="true"] .dd-chev{transform:rotate(180deg)}
+
+/* Fixed, not absolute: the panel body scrolls and would otherwise clip it. */
+.dd-list{position:fixed;z-index:60;display:none;padding:4px;
+  background:var(--popover);border:1px solid var(--border);
+  border-radius:var(--radius-md);box-shadow:var(--shadow-pop);
+  max-height:60vh;overflow-y:auto}
+.dd-list.open{display:block}
+.dd-opt{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;padding:7px 9px;border-radius:var(--radius-sm);cursor:pointer;
+  font-family:var(--font-sans);font-size:12px;font-weight:500;text-align:left;
+  color:var(--foreground);background:transparent}
+.dd-opt:hover,.dd-opt.active{background:var(--secondary)}
+.dd-opt[aria-selected="true"]{color:var(--c-route)}
+.dd-opt[aria-disabled="true"]{color:var(--muted-foreground);cursor:default;opacity:.55}
+.dd-opt[aria-disabled="true"]:hover{background:transparent}
+.dd-tag{font-size:10px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted-foreground)}
+.dd-check{flex-shrink:0;opacity:0}
+.dd-opt[aria-selected="true"] .dd-check{opacity:1}
+
+
+.share-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.share-row .btn{height:32px;font-size:12px}
+
+/* SHARED VIEW SHOWS THE ANSWER AND NOTHING ELSE: the stat grid, the descent
+   phases and the instruction line. Every control is hidden, because none of
+   them mean anything when the markers are locked.
+
+   Hidden by id rather than by position in the panel. Positional selectors like
+   .panel-body>div:last-child were used first and are quietly wrong the moment a
+   block is added or reordered. */
+body.shared #wallBlock,
+body.shared #btnCalc,
+body.shared #shareRow,
+body.shared #shareHint,
+body.shared #sepA,
+body.shared #sepB,
+body.shared #dropsBlock{display:none}
+body.shared .panel-sub{color:var(--c-route);font-weight:500}
+
+@media (max-width:640px){
+  #panel{left:8px;right:8px;bottom:8px;width:auto;max-height:52vh}
+  .view-controls{top:10px;right:10px}
+  .zoom-badge{top:10px;left:10px}
+  .stat-v{font-size:16px}
+
+  /* The panel is full width here, so sliding it sideways would take the tab off
+     screen with it. Collapse down to just the header instead, tab on the right
+     of that header, chevron pointing down to close and up to reopen. */
+  #panelToggle{left:auto;right:10px;top:10px;bottom:auto;margin:0;
+    width:34px;height:30px;box-shadow:none}
+  #panelToggle svg{transform:rotate(-90deg)}
+  #panel.collapsed{transform:none}
+  #panel.collapsed .panel-body{display:none}
+  #panel.collapsed #panelToggle svg{transform:rotate(90deg)}
+}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="mapCanvas"></canvas>
+  <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+
+<div class="view-controls">
+  <button class="icon-btn" id="btnZoomIn" title="Zoom in" aria-label="Zoom in">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <button class="icon-btn" id="btnZoomOut" title="Zoom out" aria-label="Zoom out">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>
+  </button>
+  <button class="icon-btn" id="btnReset" title="Reset view" aria-label="Reset view">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+  </button>
+</div>
+
+<aside id="panel">
+  <button id="panelToggle" aria-label="Hide panel" aria-expanded="true" title="Hide panel">
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <path d="M15 6 L9 12 L15 18" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <div class="panel-head">
+    <div class="panel-title">Drop Solver</div>
+    <div class="panel-sub">Drag the markers, then calculate</div>
+  </div>
+  <div class="panel-body">
+    <div id="modeBlock">
+      <div class="field-row">
+        <span class="field-label">Mode</span>
+      </div>
+      <button class="dd-btn" id="modeBtn" aria-haspopup="listbox" aria-expanded="false">
+        <span id="modeBtnText">Battle Royale</span>
+        <svg class="dd-chev" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor"
+                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+    <div id="wallBlock">
+      <div class="field-row">
+        <span class="field-label">Wall height offset</span>
+        <span class="field-value" id="wallValue">0 walls</span>
+      </div>
+      <input type="range" id="wallSlider" min="-10" max="10" step="1" value="0"
+             aria-label="Wall height offset">
+      <div class="range-ends"><span>-10</span><span>+10</span></div>
+    </div>
+    <button class="btn btn-primary" id="btnCalc">Calculate</button>
+    <div class="share-row" id="shareRow">
+      <button class="btn btn-ghost btn-sm" id="btnShareImg">Share image</button>
+      <button class="btn btn-ghost btn-sm" id="btnShareLink">Share link</button>
+    </div>
+    <div class="hint" id="shareHint" style="display:none"></div>
+    <div class="sep" id="sepA"></div>
+    <div id="results"></div>
+    <div class="sep" id="sepB"></div>
+    <div id="dropsBlock">
+      <div class="drops-head">
+        <span class="section-label" style="margin:0">Saved drops</span>
+        <span class="drops-count" id="dropCount">0</span>
+      </div>
+      <div id="dropList"></div>
+      <div class="save-row">
+        <input type="text" id="dropName" placeholder="Name this drop" maxlength="22"
+               autocomplete="off" spellcheck="false">
+        <button class="btn btn-ghost btn-sm" id="btnSaveDrop">Save</button>
+      </div>
+      <div class="save-row" style="margin-top:8px">
+        <input type="text" id="newFolder" placeholder="New folder" maxlength="18"
+               autocomplete="off" spellcheck="false">
+        <button class="btn btn-ghost btn-sm" id="btnAddFolder">Add</button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- Outside the panel on purpose. #panel has a backdrop-filter, which makes it
+     a containing block for position:fixed children, so a popup nested inside it
+     lands relative to the panel instead of the viewport. -->
+<div class="dd-list" id="modeList" role="listbox" aria-label="Game mode"></div>
+
+
+<script>
+'use strict';
+
+/* ======================= THE SOLVER =======================
+
+   The physics is NOT written in this file. `solver.js` is the single source
+   for it, and build.js inlines a verbatim copy right here, the same way it
+   inlines the two map images. That is why there is no second implementation
+   to keep in step any more. There used to be one: the tests could only see
+   `solver.js`, and all that stood between the two copies was a check that
+   compared the constants, which could not see a logic change at all.
+
+   To change the physics: edit `solver.js`, run `npm test`, run `npm run build`.
+   ========================================================================== */
+/*__SOLVER_JS__*/
+
+/* ======================= UI-ONLY CONFIG =======================
+
+   Everything the solver has no use for: the map API, what the modes are
+   called, what colour each phase is drawn in. It is merged onto the solver's
+   CONFIG so the rest of the page still sees a single object. Nothing with a
+   metre or a second in it belongs in here.
+   ============================================================== */
+Object.assign(CONFIG, {
+  /* Bus altitude. technik-consulting.eu: "into the bus 830", and "right after
+     the jump 810". Fixed, not a slider: the bus flies the same height every
+     match, so exposing it only ever let it be set wrong. */
+  busAltitude:830,
+
+  /* How close the landing pin has to be to a POI to inherit its elevation. */
+  snapRadius:150,
+  /* Hard stops at both ends. min 1 = the map exactly fills the frame. */
+  /* min 0.8 = you can pull back to 80% of the fit, so there is a margin of
+     ocean visible around the whole island. max is unchanged. */
+  zoom:{min:0.8, max:12, wheel:1.0022},
+
+  apiUrl:'https://fortnite-api.com/v1/map',
+  apiTimeoutMs:8000,
+
+  /* ======================= MODES =======================
+
+     What changes is the ending: modern Battle Royale lets you cut the glider and
+     freefall the last stretch, OG does not, so in OG the glider opens at 100 m
+     and takes you all the way in.
+
+     Each mode carries its own map and its own transform, because a position is
+     only meaningful against the island it was clicked on.
+
+     A mode may also override individual flight speeds through `speeds`, which is
+     shallow-merged over CONFIG.modes for that mode only.
+
+     BATTLE ROYALE IS THE BASELINE AND IS NOT TO BE MOVED BY ANOTHER MODE'S
+     MEASUREMENT. Its constants were verified in a real race and it is the mode
+     that has actually been played against opponents. When OG measured a glider
+     sink of 5.0 m/s where CONFIG says 7.0, the fix was to give OG its own number,
+     not to edit the shared one: editing the shared one silently moved Battle
+     Royale's cut altitude, its max reach and its jump lead at long offsets.
+     Anything measured in one mode belongs to that mode until it is measured in
+     the other.
+
+     `live` marks the mode fortnite-api.com actually serves. It serves the
+     CURRENT Battle Royale map and nothing else: there is no season or playlist
+     parameter, /v2/map and /v1/map/og both 404, and the playlists endpoint
+     lists the OG modes but carries no map art at all. So Battle Royale refreshes
+     itself every season and OG rides on the embedded image, which has to be
+     re-cut by hand when an OG season rolls over. Everything that touches the API
+     is gated on `live` so an OG session can never be handed Battle Royale
+     coordinates or the Battle Royale island.
+
+     The three greyed rows are deliberate placeholders, not stubs to fill in on
+     a whim: each needs its own map and its own measured transform. */
+  modes_ui:[
+    {id:'br', label:'Battle Royale', canCut:true,  ready:true, live:true},
+    /* GLIDE_OG, AND BOTH ITS NUMBERS ARE NOW MEASURED IN OG.
+
+       vv 5.0: straight down with the glider open the whole way, the 100 m
+       auto-deploy window took about 20 s. Battle Royale cannot see this, because
+       it cuts after the 2 s floor and freefalls the rest, so 5 and 7 both fit
+       its stopwatch.
+
+       vh 15.0: this used to be 16.57, which was not a measurement at all. It was
+       Battle Royale's glide RATIO of 3.314 reapplied to the slower sink, and
+       that is the same cross-mode guess that already shipped Battle Royale's
+       island scale and Battle Royale's sink rate into OG and was wrong both
+       times. It was wrong here too, and OG is the one mode where it shows:
+
+         OG cannot cut, so the last 100 m of every descent is a forced glide, and
+         the model hands that window autoDeployAltitude * ratio metres of ground
+         on every single drop. At 3.314 that is 331 m, which is 100% of the
+         ground on a 300 m drop and still 55% of it on a 600 m one. In Battle
+         Royale the same window is worth 79 m and the dive does the work, so an
+         error in the ratio is invisible there and dominant here.
+
+       That is exactly the shape of the reported miss: landing about 25-30 m
+       short of the pin by the SAME amount on every drop, near or far. A constant
+       miss is a fixed-altitude phase, and the forced glide is the only one OG
+       has. 100 m of window means 0.25-0.30 of ratio, so 3.314 - 0.28 ~ 3.03.
+
+       Shipped at 3.0 flat, the conservative end of that band, for two reasons.
+       It is round in the units the game actually stores: the measured sink is
+       exactly 500 uu/s and 15.0 m/s is exactly 1500, and Epic ships movement
+       values as round unreal units. And the error is not symmetric. Modelling
+       LESS reach than the glider really has makes the solver ask for a slightly
+       earlier jump, so you arrive over the target with altitude to spare and
+       land on it a fraction of a second late. Modelling MORE reach lands you in
+       the street. Bias toward the side that still puts you on the roof.
+
+       The ground height is NOT the lever any more, though it was the fix the
+       last two times. It is pinned independently: 830 - 32.7 - 100 = 697.3 m of
+       freefall is 12.41 s against the 12.5 s measured straight down, so there is
+       no room left in it. See OG_TERRAIN_ELEVATION. */
+    {id:'og', label:'OG',            canCut:false, ready:true,
+     speeds:{GLIDE:{id:'GLIDE', label:'Glide', vh:15.0, vv:5.0, color:'#00c758'}}},
+    {id:'reload',   label:'Reload',    ready:false},
+    {id:'blitz',    label:'Blitz',     ready:false}
+  ],
+  /* v5: nothing but markers, saved drops and the wall offset is stored now, so
+     no physics constant can ever go stale in a browser again. The bump also
+     drops the old settings blob rather than carrying it around forever. */
+  storeKey:'dropsolver.v5'
+});
+
+/* Phase colours belong to the UI, not to the speeds. */
+CONFIG.modes.DIVE.color     = '#ff6467';
+CONFIG.modes.GLIDE.color    = '#00c758';
+CONFIG.modes.FREEFALL.color = '#f99c00';
+
+const EMBEDDED_MAP = '__MAP_DATA_URI__';
+const EMBEDDED_MAP_OG = '__OG_MAP_DATA_URI__';
+const clamp = (v,lo,hi) => Math.max(lo, Math.min(hi, v));
+
+/* ======================= WORLD COORDINATES ======================= */
+const worldToNorm = (T,wx,wy) => ({nx:T.a*wx+T.b*wy+T.c, ny:T.d*wx+T.e*wy+T.f});
+function normToWorld(T,nx,ny){
+  const u = nx-T.c, v = ny-T.f;
+  return {wx:T.inv.a*u+T.inv.b*v, wy:T.inv.c*u+T.inv.d*v};
+}
+
+/* ======================= STATE ======================= */
+const S = {
+  img:null, imgW:2048, imgH:2048, ambient:null,
+  /* Normalized 0..1 image coords, never touched by zoom or pan. */
+  markers:{busStart:{x:0.20,y:0.28}, busEnd:{x:0.82,y:0.66}, target:{x:0.50,y:0.50}},
+  view:{k:1, x:0, y:0}, base:{w:0,h:0}, pane:{w:0,h:0},
+  motion:{vx:0, vy:0}, raf:0,
+  pois:[], drops:[], folders:[], elevation:0, wallOffset:0,
+  highlight:null, collapsed:[], dragging:null,
+  mode:'br', result:null, stale:false, readonly:false, sharedAt:0, shareTimer:0,
+  drag:null, pan:null, pinch:null
+};
+
+/* WORLD TO IMAGE, MEASURED NOT GUESSED.
+   fortnite-api.com publishes POI world coordinates in cm but no map bounds, so
+   the transform was recovered from the images themselves: diff the labelled map
+   against the blank one to isolate the label ink, merge each label into a blob,
+   then match blob centroids to POI world coordinates. All 13 labelled POIs match
+   a blob to a mean of 1.9 px, which pins it beyond doubt.
+
+   Result: the 2048 px image spans 3098.6 m, world +x is image right and world
+   +y is image DOWN, and the image is NOT centred on the world origin (it sits
+   69.2 m east and 11.4 m south of it). Forcing the centre to the origin leaves a
+   systematic 46 px error, so the offset is real.
+
+   Stored normalized so it survives any image resolution. If Epic ever re-renders
+   the map at different world bounds, this is the one thing here that would need
+   re-measuring; the scripts that derived it are in the handoff. */
+const MAP_TRANSFORM = {
+  a: 3.2272561355e-6, b: 0, c: 0.47766145254,
+  d: 0,               e: 3.2272561355e-6, f: 0.49632202277,
+  metresAcross: 3098.6,
+  /* PROVISIONAL ON THE 42.00 ISLAND, AND HONESTLY SO.
+
+     Every number above was measured against the 41.x island, by matching label
+     ink in map_en.png to the POI world coordinates the API publishes. That fit
+     was exact and is not in doubt for the island it was made on.
+
+     42.00 is a different island. The FRAMING is confirmed to carry over: the
+     41.20 tiles from fortnite.gg stitch to a 2048 square that lays over the
+     API's own map.png with the coastline in the same pixels, and 42.00 comes
+     out of the same tile pyramid, so the picture is registered correctly.
+
+     What is NOT confirmed is metresAcross. Nothing published anywhere yet
+     carries a 42.00 POI in Epic world units: the API is still serving 41.x
+     coordinates, and fortnite.gg places its markers in Leaflet CRS.Simple
+     space, which is image space with the world scale already divided out. So
+     the span is inherited, not measured, and inheriting a span across islands
+     is exactly what cost this project 18% on OG.
+
+     Flagged rather than guessed, so the page says so on screen. To clear it,
+     do what OG did: stand in the middle of one POI, mark another, and compare
+     the metres on the HUD against what the tool reports. One reading settles
+     it. If it is out, scale metresAcross by measured/reported and delete this
+     flag. tools/og_scale.js is the same fit if more than one reading is taken. */
+  provisional: true
+};
+/* ======================= THE OG MAP =======================
+
+   Image: the OG island as rendered for OG Chapter 1 Season 9 (Neo Tilted, Mega
+   Mall, Pressure Plant), 2048x2048, taken from the Fortnite Wiki's per-patch
+   island renders. It was checked against the Battle Royale island before being
+   embedded, because a promising looking file elsewhere turned out to be the
+   current island cropped to 16:9 and mislabelled.
+
+   ONLY THE SCALE MATTERS HERE, and that is worth being clear about. The Battle
+   Royale transform has to be exact in its offset too, because it is matched
+   against POI world coordinates that arrive from the API. Nothing external is
+   ever matched against the OG map: every point on it comes from the user
+   clicking, and every number the solver produces is a distance between two of
+   those clicks. Translating the whole island by a few metres changes no answer.
+   So the origin sits at the image centre and only `metresAcross` carries weight.
+
+   THE SCALE IS MEASURED IN GAME, not carried over and not guessed. It could not
+   be recovered from the image the way the Battle Royale one was: that needed a
+   labelled render diffed against a blank one plus POI world coordinates to match
+   against, and for OG the wiki publishes no labelled twin and no API publishes
+   coordinates. Comparing island extents across renders does not settle it
+   either, since the wiki's renders carry a decorative ocean gradient that any
+   land-versus-water test latches onto instead of the coastline.
+
+   So it came from the game. Standing in the middle of Salty Springs, marking the
+   middle of three other POIs and reading the metres off the HUD:
+
+     Tilted          593 m     Paradise Palms  713 m     Sunny Steps  1162 m
+
+   One unknown fitted from three readings by least squares, which leaves two
+   spare as a check rather than an assumption: Paradise Palms lands 0.5% out,
+   Sunny Steps 0.4%, Tilted 2.4%, and Tilted is the largest of them so its middle
+   is the least well defined. tools/og_scale.js holds the POI pixel centres and
+   redoes the fit.
+
+   THIS MATTERED. The placeholder was the Battle Royale figure of 3098.6 m, and
+   the Chapter 1 island is genuinely about 15% smaller, so every OG distance read
+   18% long and the jump call was out by seconds: on a mid-map drop the old
+   number said jump at T+10.8s where the measured one says T+8.4s. Carrying one
+   island's scale onto another is exactly the kind of quiet guess that has
+   already cost this project several rounds. */
+const OG_METRES_ACROSS = 2623.9;
+const OG_TRANSFORM = {
+  a: 1/(OG_METRES_ACROSS*100), b: 0, c: 0.5,
+  d: 0, e: 1/(OG_METRES_ACROSS*100), f: 0.5,
+  metresAcross: OG_METRES_ACROSS
+};
+
+const withInverse = (t) => {
+  const det = t.a*t.e - t.b*t.d;
+  t.inv = {a: t.e/det, b:-t.b/det, c:-t.d/det, d: t.a/det};
+  return t;
+};
+withInverse(MAP_TRANSFORM);
+withInverse(OG_TRANSFORM);
+
+/* LANDING GROUND HEIGHT, AND WHY OG NEEDS ONE AT ALL.
+
+   Battle Royale gets this free: the API ships a z for every POI and the landing
+   pin snaps to the nearest one. OG has no such feed, and the first cut simply
+   used sea level. That is wrong everywhere, because no POI in Fortnite sits at
+   sea level, and in OG it is badly wrong because of how the flight ENDS.
+
+     Battle Royale ends in FREEFALL, ratio 9.0/56.2 = 0.16
+     OG            ends in GLIDE,    ratio 15.0/5.0  = 3.00
+
+   Every metre of ground the solver does not know about is a metre the flight
+   never gets to spend, and it is spent at the ratio of whatever phase was
+   running. So unmodelled ground costs about 0.2 m of reach in Battle Royale and
+   3.0 m in OG, nineteen times worse. At the median POI height that is a 53 m
+   shortfall in OG and a 3 m one in Battle Royale, which is the difference
+   between "fine" and "I land in front of the house".
+
+   MEASURED, and by two independent routes that agree:
+
+     landing 25 m short of the pin against a modelled 17.5 m of ground. Ground
+     costs 3.0 m of reach per metre here, so 25/3.0 = 8.3 m unaccounted for,
+     putting the real ground at 25.8 m.
+
+     straight down in OG reaching auto-deploy in 12.5 s. That is 702.5 m of
+     freefall, so the ground sits at 830 - 100 - 702.5 = 27.5 m. Hand timing to
+     a quarter second is worth +/-14 m, so this says 13 to 41 m.
+
+   Two unrelated measurements landing on 25.8 and 27.5 is the good case, so the
+   TERRAIN is 25.0 m: the low end, deliberately, because the first of those two
+   readings is contaminated. It back-solves ground from a landing that was short,
+   and part of that shortfall has since turned out to belong to the glide ratio
+   rather than to the ground. The clean reading is the stopwatch one. For
+   reference the 32 POIs the live API publishes sit at a median of 17.5 m, range
+   -3.6 to 61.2, which is where the first guess came from and which both
+   measurements sit comfortably inside.
+
+   THE SECOND READING IS ALSO WHY THIS CONSTANT IS NOW FROZEN. It pins the whole
+   altitude budget without going near the glider: 830 - 32.7 - 100 = 697.3 m of
+   freefall is 12.41 s against the 12.5 s on the stopwatch. Raising the ground
+   again to absorb a shortfall, which is what happened the last two times, would
+   now have to argue with that. So a residual miss belongs to the glide ratio
+   instead, and that is where the most recent one went: see GLIDE_OG.
+
+   PLUS THE ROOF, which is the part that kept it short after the terrain was
+   right. You do not aim at the dirt beside a building, you aim at the building,
+   and the flight ends on the roof: a real surface, a real height, and one the
+   solver was ignoring. A Fortnite house is two walls tall, 2 * 3.84 = 7.68 m,
+   and in OG every metre of that is 3.0 m of reach. So landing on a roof rather
+   than beside it costs 23 m, which is very close to the shortfall that was still
+   there after the terrain was measured.
+
+     terrain 25.0 + roof 7.68 = 32.68 m of landing surface
+
+   That is why this is a LANDING SURFACE height and not a terrain height. It is
+   the height the flight actually stops at.
+
+   One constant still cannot be right everywhere: ground varies over a range
+   worth more than 190 m of OG reach, and roofs vary from a shed to Neo Tilted's
+   towers. The wall offset stays the per-drop correction and is worth 11.5 m of
+   OG reach per wall, which is exactly one storey. Aiming at open ground instead
+   of a building is -2 walls. */
+const OG_TERRAIN_ELEVATION = 32.7;
+
+/* The map, the transform and the ground a mode flies over. Keep these together:
+   handing a mode one island's picture and another island's scale is silently
+   wrong in a way no test on the solver alone would catch. */
+const MAPS = {
+  br: {image:EMBEDDED_MAP,    transform:MAP_TRANSFORM, elevation:null},
+  og: {image:EMBEDDED_MAP_OG, transform:OG_TRANSFORM,  elevation:OG_TERRAIN_ELEVATION}
+};
+const mapFor = (id) => MAPS[id] || MAPS.br;
+
+S.transform = mapFor(S.mode).transform;
+
+const $ = (id) => document.getElementById(id);
+const stage = $('stage'), canvas = $('mapCanvas'), ctx = canvas.getContext('2d'), svg = $('overlay');
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+/* ======================= PERSISTENCE =======================
+
+   ONLY GENUINE USER INPUT IS STORED: where the markers are, the saved drops,
+   and the wall offset. Every physics constant is read straight from CONFIG on
+   every load and is never written to localStorage at all.
+
+   That is deliberate, and it is the fix for a bug that shipped three times.
+   When constants were persisted, a value written by an older build outlived the
+   default it came from: allowEarlyDeploy stuck at false and capped reach, then
+   minGlideTime stuck at 1.5 and the panel kept saying "hold 1.5s" after every
+   source file said 2.0. With nothing tunable there is nothing to go stale, so
+   retuning a constant now reaches everyone on the next refresh. Keep it that
+   way: do not add a settings object back. */
+function save(){
+  try{
+    localStorage.setItem(CONFIG.storeKey, JSON.stringify({
+      markers:S.markers, drops:S.drops, folders:S.folders,
+      wallOffset:S.wallOffset, mode:S.mode}));
+  }catch(e){}
+}
+function load(){
+  try{
+    const raw = localStorage.getItem(CONFIG.storeKey); if (!raw) return;
+    const o = JSON.parse(raw);
+    const pt = (p) => p && isFinite(p.x) && isFinite(p.y);
+    if (o.markers && pt(o.markers.busStart) && pt(o.markers.busEnd) && pt(o.markers.target))
+      S.markers = {busStart:{x:o.markers.busStart.x, y:o.markers.busStart.y},
+                   busEnd:{x:o.markers.busEnd.x, y:o.markers.busEnd.y},
+                   target:{x:o.markers.target.x, y:o.markers.target.y}};
+    /* No cap: saved drops are unlimited. Anything that is not a usable drop is
+       dropped rather than trusted, since this comes back from storage. */
+    if (Array.isArray(o.drops)) S.drops = o.drops.filter(d =>
+      d && typeof d.name === 'string' && pt(d.busStart) && pt(d.busEnd) && pt(d.target));
+    /* A drop tagged with a mode that no longer exists would be listed nowhere
+       and look deleted, so anything unrecognised falls back to Battle Royale. */
+    for (const d of S.drops)
+      if (!CONFIG.modes_ui.some(m => m.id === d.mode && m.ready)) d.mode = 'br';
+    if (Array.isArray(o.folders))
+      S.folders = o.folders.filter(f => typeof f === 'string' && f.trim())
+                           .map(f => f.trim());
+    /* Any folder a drop refers to must exist, otherwise its drops would be
+       filed under a folder with no row and become unreachable. */
+    for (const d of S.drops){
+      const f = folderOf(d);
+      if (f && !S.folders.includes(f)) S.folders.push(f);
+    }
+    if (typeof o.mode === 'string' && CONFIG.modes_ui.some(m => m.id === o.mode && m.ready))
+      S.mode = o.mode;
+    if (isFinite(o.wallOffset))
+      S.wallOffset = clamp(Math.round(o.wallOffset), -CONFIG.wallRange, CONFIG.wallRange);
+  }catch(e){}
+}
+
+/* ======================= COORDINATES ======================= */
+const toScreen = (n) => ({x:n.x*S.base.w*S.view.k + S.view.x,
+                          y:n.y*S.base.h*S.view.k + S.view.y});
+const toNorm = (sx,sy) => ({x:(sx-S.view.x)/(S.base.w*S.view.k),
+                            y:(sy-S.view.y)/(S.base.h*S.view.k)});
+function toWorld(n){
+  if (S.transform){ const w = normToWorld(S.transform, n.x, n.y);
+    return {x:w.wx/100, y:w.wy/100}; }
+  const a = MAP_TRANSFORM.metresAcross;
+  return {x:n.x*a, y:n.y*a*(S.imgH/S.imgW)};
+}
+function fromWorld(w){
+  if (S.transform){ const q = worldToNorm(S.transform, w.x*100, w.y*100);
+    return {x:q.nx, y:q.ny}; }
+  const a = MAP_TRANSFORM.metresAcross;
+  return {x:w.x/a, y:w.y/(a*(S.imgH/S.imgW))};
+}
+
+/* ======================= VIEW =======================
+   Zoom and pan modelled on the Leaflet setup the reference repo uses
+   (zoomSnap 0.25, smooth wheel, drag inertia, bounded with viscosity):
+   continuous wheel zoom anchored on the cursor, drag with momentum, and a
+   rubber band at both the pan edges and the zoom limits that springs back on
+   release rather than hard stopping.
+   ==================================================== */
+function layout(){
+  const W = stage.clientWidth, H = stage.clientHeight;
+  S.pane = {w:W, h:H};
+  /* Full device pixel ratio, capped only to keep the buffer sane on very high
+     DPR phones. This is the single biggest win for map sharpness. */
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  canvas.width = Math.round(W*dpr); canvas.height = Math.round(H*dpr);
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  const ar = S.imgW/S.imgH;
+  let w = W, h = W/ar;
+  if (h > H){ h = H; w = H*ar; }
+  const had = S.base.w > 0;
+  const prev = had ? toNorm(W/2, H/2) : null;
+  S.base = {w, h};
+  if (!had) resetView();
+  else {
+    const p = toScreen(prev);
+    S.view.x += W/2 - p.x; S.view.y += H/2 - p.y;
+    /* Resizing changes the cover ratio, so a zoom that was legal before can now
+       be below the floor. Pull it back up about the centre before clamping. */
+    const mk = minZoom();
+    if (S.view.k < mk){
+      const c = {x:W/2, y:H/2}, r = mk/S.view.k;
+      S.view.x = c.x - (c.x - S.view.x)*r;
+      S.view.y = c.y - (c.y - S.view.y)*r;
+      S.view.k = mk;
+    }
+    hardClamp();
+  }
+}
+/* MINIMUM ZOOM SITS BELOW THE FIT, so you can pull back PAST the island edge and
+   see a margin of ocean around the whole map. k = 1 is exactly the fit, so
+   CONFIG.zoom.min below 1 is that margin: 0.8 leaves a quarter of a screen of
+   slack around the island. The ceiling is untouched, so zoom-in reach is
+   unchanged. */
+function minZoom(){ return CONFIG.zoom.min; }
+function resetView(){
+  S.view.k = minZoom();
+  const b = bounds();
+  S.view.x = (S.pane.w - S.base.w*S.view.k)/2;
+  S.view.y = (S.pane.h - S.base.h*S.view.k)/2;
+}
+/* Allowed pan range at the current zoom. When the scaled map is smaller than
+   the pane on an axis it is pinned centred there. */
+function bounds(){
+  const w = S.base.w*S.view.k, h = S.base.h*S.view.k;
+  const cx = (S.pane.w - w)/2, cy = (S.pane.h - h)/2;
+  return {
+    minX: w <= S.pane.w ? cx : S.pane.w - w, maxX: w <= S.pane.w ? cx : 0,
+    minY: h <= S.pane.h ? cy : S.pane.h - h, maxY: h <= S.pane.h ? cy : 0
+  };
+}
+function hardClamp(){
+  const b = bounds();
+  S.view.x = clamp(S.view.x, b.minX, b.maxX);
+  S.view.y = clamp(S.view.y, b.minY, b.maxY);
+}
+/* Hard limits at both ends, no rubber band. Zoom stops dead at the bounds and
+   the map never pulls its edges inside the frame, the way the Leaflet setup in
+   the reference repo behaves with maxBounds at full viscosity. */
+function zoomAt(cx, cy, factor){
+  const k0 = S.view.k;
+  const k1 = clamp(k0*factor, minZoom(), CONFIG.zoom.max);
+  if (Math.abs(k1-k0) < 1e-9) return;
+  S.view.x = cx - (cx - S.view.x)*(k1/k0);
+  S.view.y = cy - (cy - S.view.y)*(k1/k0);
+  S.view.k = k1;
+  hardClamp(); render();
+}
+/* Drag momentum only. Velocity dies the moment the map hits an edge, so the
+   pan glides to a stop instead of bouncing. */
+function settle(){
+  cancelAnimationFrame(S.raf);
+  const step = () => {
+    if (Math.abs(S.motion.vx) < 0.06 && Math.abs(S.motion.vy) < 0.06){
+      S.motion.vx = 0; S.motion.vy = 0; hardClamp(); render(); return;
+    }
+    const b = bounds();
+    const nx = S.view.x + S.motion.vx, ny = S.view.y + S.motion.vy;
+    if (nx < b.minX || nx > b.maxX) S.motion.vx = 0;
+    if (ny < b.minY || ny > b.maxY) S.motion.vy = 0;
+    S.view.x = clamp(nx, b.minX, b.maxX);
+    S.view.y = clamp(ny, b.minY, b.maxY);
+    S.motion.vx *= 0.92; S.motion.vy *= 0.92;
+    render();
+    S.raf = requestAnimationFrame(step);
+  };
+  S.raf = requestAnimationFrame(step);
+}
+
+/* ======================= RENDER ======================= */
+function render(){ drawMap(); drawOverlay(); }
+
+/* Ambient wash so the letterbox area is not flat black. A 32px thumbnail of
+   the map scaled up with smoothing gives a soft blur of the map's own colours
+   for almost no cost, then a radial scrim keeps it behind the map. */
+function makeAmbient(img){
+  const c = document.createElement('canvas'); c.width = c.height = 32;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0, 32, 32);
+  S.ambient = c;
+}
+function drawAmbient(){
+  const {w:W, h:H} = S.pane;
+  ctx.fillStyle = '#0a0a0a'; ctx.fillRect(0,0,W,H);
+  if (!S.ambient) return;
+  ctx.save();
+  ctx.globalAlpha = 0.55;
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  const s = Math.max(W,H)*1.45;
+  ctx.drawImage(S.ambient, (W-s)/2, (H-s)/2, s, s);
+  ctx.restore();
+  const g = ctx.createRadialGradient(W/2,H/2,0, W/2,H/2, Math.max(W,H)*0.72);
+  g.addColorStop(0,'rgba(10,10,10,.42)');
+  g.addColorStop(1,'rgba(10,10,10,.90)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+}
+function drawMap(){
+  const {w:W, h:H} = S.pane;
+  ctx.clearRect(0,0,W,H);
+  drawAmbient();
+  if (!S.img) return;
+  const dw = S.base.w*S.view.k, dh = S.base.h*S.view.k;
+  /* Draw only the visible source sub-rectangle at its destination size, so the
+     browser resamples just what is on screen instead of the whole 2048px
+     bitmap every frame. Sharper when zoomed and cheaper. */
+  const dx0 = Math.max(0, S.view.x), dy0 = Math.max(0, S.view.y);
+  const dx1 = Math.min(W, S.view.x + dw), dy1 = Math.min(H, S.view.y + dh);
+  if (dx1 <= dx0 || dy1 <= dy0) return;
+  const sx = (dx0 - S.view.x)/dw*S.imgW, sy = (dy0 - S.view.y)/dh*S.imgH;
+  const sw = (dx1 - dx0)/dw*S.imgW,     sh = (dy1 - dy0)/dh*S.imgH;
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(S.img, sx, sy, sw, sh, dx0, dy0, dx1-dx0, dy1-dy0);
+}
+
+const el = (tag, attrs) => {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+};
+
+/* Convex hull, Andrew's monotone chain. Returns the points in order. */
+function hull(pts){
+  if (pts.length < 3) return pts.slice();
+  const p = pts.slice().sort((a,b) => a.x - b.x || a.y - b.y);
+  const cross = (o,a,b) => (a.x-o.x)*(b.y-o.y) - (a.y-o.y)*(b.x-o.x);
+  const half = (src) => {
+    const out = [];
+    for (const q of src){
+      while (out.length >= 2 && cross(out[out.length-2], out[out.length-1], q) <= 0) out.pop();
+      out.push(q);
+    }
+    out.pop();
+    return out;
+  };
+  return half(p).concat(half(p.reverse()));
+}
+
+/* Push a convex polygon outward by pad, keeping the sides STRAIGHT.
+
+   Each edge slides out along its own outward normal. Consecutive offset edges
+   are then intersected to give the new corner, which is a true mitered offset.
+
+   THE MITER LIMIT IS THE WHOLE TRICK. A miter sits pad/sin(angle/2) from the
+   original corner, so a sharp corner throws it a very long way out: a triangle
+   of drops was pushing one corner 96 px for a 34 px pad, nearly three times the
+   spacing, which made the shape a huge spiky triangle nowhere near the pins.
+   Past the limit the corner is BEVELLED instead, emitting the two offset edge
+   endpoints so the corner is simply cut off. Every part of the outline then
+   stays exactly pad away from the hull, sides stay straight, and nothing is
+   rounded.
+
+   An even earlier version faked the whole thing with a very thick round-joined
+   stroke, which is a Minkowski sum with a disc. That rounded every corner, and
+   because the stroke sits on top of the fill it doubled up and showed two
+   different opacities. This returns real geometry, so the shape is drawn as ONE
+   path with ONE fill opacity. */
+const MITER_LIMIT = 1.4;          // bevel anything sharper than about 90 degrees
+function expandPoly(h, pad){
+  const n = h.length;
+  /* Work in a known orientation so "outward" is unambiguous. */
+  let area = 0;
+  for (let i = 0; i < n; i++){
+    const a = h[i], b = h[(i+1)%n];
+    area += a.x*b.y - b.x*a.y;
+  }
+  const p = area < 0 ? h.slice().reverse() : h.slice();
+
+  /* Offset every edge along its outward normal, keeping both endpoints. */
+  const seg = [];
+  for (let i = 0; i < n; i++){
+    const a = p[i], b = p[(i+1)%n];
+    const dx = b.x-a.x, dy = b.y-a.y, L = Math.hypot(dx,dy) || 1;
+    const nx = dy/L, ny = -dx/L;                       // outward for this winding
+    seg.push({ax:a.x+nx*pad, ay:a.y+ny*pad, bx:b.x+nx*pad, by:b.y+ny*pad, dx, dy});
+  }
+  const out = [];
+  for (let i = 0; i < n; i++){
+    const u = seg[(i-1+n)%n], v = seg[i], c = p[i];
+    const den = u.dx*v.dy - u.dy*v.dx;
+    if (Math.abs(den) > 1e-9){
+      const t = ((v.ax-u.ax)*v.dy - (v.ay-u.ay)*v.dx) / den;
+      const q = {x:u.ax + u.dx*t, y:u.ay + u.dy*t};
+      if (Math.hypot(q.x-c.x, q.y-c.y) <= pad*MITER_LIMIT){ out.push(q); continue; }
+    }
+    /* Too sharp, or the edges are parallel: cut the corner. */
+    out.push({x:u.bx, y:u.by}, {x:v.ax, y:v.ay});
+  }
+  return out;
+}
+
+/* The outline for a set of points, pad away from all of them.
+
+   A convex hull needs real area before it can be offset. One drop has none, two
+   have none, and three nearly in a line have almost none, which made the winding
+   test pick the wrong side and pushed the outline the WRONG WAY, leaving the
+   pins outside their own highlight. All three are the same case: the points lie
+   on a segment, and the answer is a rectangle around that segment, oriented
+   along it rather than axis aligned so the margin stays exactly pad the whole
+   way round. A single drop falls out of the same code as a square. */
+function areaPolygon(pts, pad){
+  let a = pts[0], b = pts[0], span = -1;
+  for (const p of pts) for (const q of pts){
+    const d = Math.hypot(p.x-q.x, p.y-q.y);
+    if (d > span){ span = d; a = p; b = q; }
+  }
+  let ux = 1, uy = 0, maxPerp = 0;
+  if (span > 1e-6){
+    ux = (b.x-a.x)/span; uy = (b.y-a.y)/span;
+    for (const p of pts)
+      maxPerp = Math.max(maxPerp, Math.abs((p.x-a.x)*(-uy) + (p.y-a.y)*ux));
+  }
+  if (span > 1e-6 && maxPerp >= 2) return expandPoly(hull(pts), pad);
+
+  const nx = -uy, ny = ux;
+  const A = {x:a.x-ux*pad, y:a.y-uy*pad}, B = {x:b.x+ux*pad, y:b.y+uy*pad};
+  return [{x:A.x+nx*pad, y:A.y+ny*pad}, {x:B.x+nx*pad, y:B.y+ny*pad},
+          {x:B.x-nx*pad, y:B.y-ny*pad}, {x:A.x-nx*pad, y:A.y-ny*pad}];
+}
+
+/* FOLDER AREA HIGHLIGHT.
+
+   The region covering every drop in the open folder: the convex hull of the
+   landing pins, pushed outward so the pins sit inside the shape rather than on
+   its edge. Drawn as a single path, one flat fill opacity plus a crisp 2 px
+   border, with straight sides and sharp corners. */
+const HULL_PAD = 34;
+function drawFolderArea(){
+  if (!S.highlight) return;
+  const pts = S.drops.filter(d => folderOf(d) === S.highlight && d.target
+                                  && modeOf(d) === S.mode)
+                     .map(d => toScreen(d.target));
+  if (!pts.length) return;
+
+  const poly = areaPolygon(pts, HULL_PAD);
+  const d = 'M' + poly.map(p => p.x.toFixed(1)+' '+p.y.toFixed(1)).join(' L') + ' Z';
+  svg.appendChild(el('path', {
+    d, fill:'var(--c-area)', 'fill-opacity':0.34,
+    stroke:'var(--c-area)', 'stroke-width':2, 'stroke-opacity':0.9,
+    'stroke-linejoin':'miter', 'pointer-events':'none'
+  }));
+
+  /* A small dot on each drop in the folder, so you can see what it covers. */
+  for (const p of pts){
+    svg.appendChild(el('circle', {cx:p.x.toFixed(1), cy:p.y.toFixed(1), r:4,
+      fill:'var(--c-area)', stroke:'#000', 'stroke-opacity':.35, 'stroke-width':1,
+      'pointer-events':'none'}));
+  }
+}
+
+function drawOverlay(){
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const A = toScreen(S.markers.busStart), B = toScreen(S.markers.busEnd),
+        T = toScreen(S.markers.target);
+  /* A stale answer is never drawn on the map. */
+  const r = (!S.stale && S.result && S.result.ok) ? S.result : null;
+
+  drawFolderArea();            // underneath everything else
+  drawBusRoute(A, B);
+  if (r) drawFlight(r, T);
+  drawBusMarker(A, 'Start', 'busStart');
+  drawBusMarker(B, 'End', 'busEnd');
+  if (r) drawJump(toScreen(fromWorld(r.jumpPos)));
+  drawPin(T);
+}
+
+/* BUS ROUTE.
+
+   Same treatment as the reference repo's Leaflet polyline (weight 3, opacity
+   0.7, a 10/10 dash pattern) but with the dashes replaced by arrow glyphs, so
+   the line still carries the direction of travel. Static: nothing animates.
+   Sized in screen pixels, so the trail looks the same at every zoom and simply
+   gains arrows as you zoom in. */
+/* BUS ROUTE.
+
+   Solid blue chevrons, no outline. Each is one filled polygon rather than a
+   stroked V, so there is nothing to draw an edge around and no second pass.
+
+   THE COUNT IS FIXED, NOT PER PIXEL. Spacing is measured along the route in
+   normalized map units, so zooming spreads the same chevrons further apart
+   instead of spawning more of them. Counting in screen pixels meant every zoom
+   step bred a new row of arrows.
+
+   ROUTE_INSET keeps the band clear of the end markers, which are deliberately
+   larger than a chevron so they read as the ends of the line rather than as
+   part of it. */
+const ROUTE_STEP = 13;         // screen px between chevrons, at every zoom
+const ROUTE_MIN = 2, ROUTE_MAX = 600;
+const ROUTE_W = 5, ROUTE_DEPTH = 8, ROUTE_HALF = 8;
+const ROUTE_INSET = 25;
+const SWAP_R = 17;
+const SWAP_GLYPH = 'M27.44 14.00L36.67 14.02L37.23 14.95L39.67 15.02L40.23 15.95L41.77 16.05L42.09 16.84L42.84 17.09L43.23 17.95L44.84 18.09L45.09 18.84L45.84 19.09L46.09 19.84L46.91 20.16L47.09 21.84L47.84 22.09L48.09 22.84L48.95 23.23L48.95 24.77L48.02 25.33L48.09 26.84L49.84 27.09L50.09 27.84L50.84 28.09L51.09 28.84L51.84 29.09L52.09 29.84L52.91 30.16L53.05 31.77L53.98 32.33L53.91 36.84L51.33 36.98L50.84 36.09L50.16 36.09L49.98 38.67L49.05 39.23L48.91 40.84L48.05 41.23L47.91 42.84L47.16 43.09L46.91 43.84L46.16 44.09L45.91 44.84L45.16 45.09L44.91 45.84L44.16 46.09L43.91 46.84L43.16 47.09L42.84 47.91L41.23 48.05L40.84 48.91L39.23 49.05L38.67 49.98L36.23 50.05L35.67 50.98L28.33 50.98L27.77 50.05L25.33 49.98L24.77 49.05L23.16 48.91L22.77 48.05L21.16 47.91L20.91 47.16L20.16 46.91L19.91 46.16L19.16 45.91L18.91 45.16L18.16 44.91L17.91 44.16L17.16 43.91L16.91 43.16L16.09 42.84L15.95 41.23L15.02 40.67L15.00 38.44L15.33 38.02L16.84 37.91L17.23 37.05L18.77 37.05L19.16 37.91L19.91 38.16L20.16 38.91L20.91 39.16L21.05 40.77L21.91 41.16L22.16 41.91L22.91 42.16L23.16 42.91L24.77 43.05L25.16 43.91L26.77 44.05L27.33 44.98L30.77 45.05L31.33 45.98L32.77 45.95L33.33 45.02L36.67 44.98L37.23 44.05L38.84 43.91L39.23 43.05L40.84 42.91L41.09 42.16L41.84 41.91L42.09 41.16L42.91 40.84L43.09 39.16L43.84 38.91L44.09 38.16L44.98 37.67L44.91 37.16L44.16 36.91L43.91 36.16L43.02 35.67L43.05 31.23L43.84 30.91L44.09 30.16L44.84 29.91L45.09 29.16L45.84 28.91L46.09 28.16L46.84 27.91L47.00 27.44L46.67 27.02L45.16 26.91L44.91 26.16L44.16 25.91L43.91 25.16L43.16 24.91L42.91 24.16L42.16 23.91L41.91 23.16L41.16 22.91L40.91 22.16L40.16 21.91L39.84 21.09L38.23 20.95L37.84 20.09L36.23 19.95L35.91 19.16L35.56 19.00L28.33 19.02L27.77 19.95L26.16 20.09L25.77 20.95L24.16 21.09L23.91 21.84L23.16 22.09L22.91 22.84L22.16 23.09L21.91 23.84L21.16 24.09L20.91 24.84L20.05 25.23L20.09 26.84L21.95 27.23L21.98 30.67L21.05 31.23L20.91 32.84L20.16 33.09L19.91 33.84L19.16 34.09L18.91 34.84L18.16 35.09L17.67 35.98L14.16 35.91L13.91 35.16L13.16 34.91L12.91 34.16L12.16 33.91L11.91 33.16L11.09 32.84L10.95 31.23L10.02 30.67L10.09 28.16L10.84 27.91L11.09 27.16L11.84 26.91L12.23 26.05L12.84 26.09L13.23 26.95L13.91 26.84L14.05 25.23L14.98 24.67L15.05 23.23L15.91 22.84L16.16 22.09L16.91 21.84L17.05 20.23L17.91 19.84L18.16 19.09L18.91 18.84L19.16 18.09L20.77 17.95L21.16 17.09L21.91 16.84L22.16 16.09L23.77 15.95L24.33 15.02L26.77 14.95L27.33 14.02ZM28.44 25.00L35.77 25.05L36.16 25.91L36.91 26.16L37.16 26.91L37.91 27.16L38.16 27.91L38.91 28.16L39.05 29.77L39.95 30.23L39.98 33.67L39.05 34.23L38.91 35.84L38.05 36.23L37.91 37.84L36.23 38.05L35.67 38.98L34.23 39.05L33.67 39.98L30.33 39.98L29.77 39.05L27.23 38.95L26.84 38.09L26.09 37.84L25.84 37.09L25.09 36.84L24.91 35.16L24.05 34.77L24.00 30.44L24.98 29.67L25.05 27.23L25.84 26.91L26.23 26.05L27.84 25.91L28.33 25.02Z';
+
+/* The thicker, closer chevron: 5 px stroke on 8 px arms, spaced 13 px apart at
+   every zoom. This is the version that was tried with a dark edge behind it;
+   the edge was rejected, the geometry was not. Spacing is in screen pixels, so
+   zooming in lays down more of them and the band keeps its density. */
+const CHEVRON = `M${-ROUTE_DEPTH} ${-ROUTE_HALF} L0 0 L${-ROUTE_DEPTH} ${ROUTE_HALF}`;
+
+function drawBusRoute(A, B){
+  const dx = B.x-A.x, dy = B.y-A.y, L = Math.hypot(dx,dy);
+  if (L < 2) return;
+  const ux = dx/L, uy = dy/L, ang = Math.atan2(dy,dx)*180/Math.PI;
+
+  const from = Math.min(ROUTE_INSET, L/2), to = Math.max(L - ROUTE_INSET, L/2);
+  const span = to - from;
+  /* Spacing is a fixed number of SCREEN pixels, so zooming in lays down more
+     chevrons and keeps the band looking the same density at every zoom. */
+  const n = Math.min(ROUTE_MAX, Math.max(ROUTE_MIN, Math.round(span/ROUTE_STEP)));
+  if (span > 1){
+    const g = el('g', {fill:'none', stroke:'var(--c-route)',
+      'stroke-width':ROUTE_W, 'stroke-linecap':'round', 'stroke-linejoin':'round',
+      opacity:.9});
+    /* The swap control has no fill behind it, so the band has to leave a hole
+       for it or chevrons show through the middle of the ring. */
+    const gap = SWAP_R + 6, half = L/2;
+    for (let i = 0; i < n; i++){
+      const s = from + (n === 1 ? span/2 : (i/(n-1))*span);
+      if (Math.abs(s - half) < gap) continue;
+      g.appendChild(el('path', {d:CHEVRON,
+        transform:`translate(${(A.x+ux*s).toFixed(2)} ${(A.y+uy*s).toFixed(2)}) `
+                + `rotate(${ang.toFixed(2)})`}));
+    }
+    svg.appendChild(g);
+  }
+
+  if (S.readonly) return;                 // nothing to change in a shared view
+  /* Swap control at the midpoint. */
+  const mx = A.x + ux*(L/2), my = A.y + uy*(L/2);
+  const s = el('g', {class:'swap', 'data-swap':'1',
+    transform:`translate(${mx.toFixed(2)} ${my.toFixed(2)})`});
+  s.appendChild(el('title')).textContent = 'Swap start and end';
+  s.appendChild(el('circle', {cx:0, cy:0, r:SWAP_R + 7, fill:'transparent'}));
+  /* THE GLYPH IS THE BADGE. Traced from the reference site's own
+     bus_reverse.png, then filled blue and given a white outline. There is no
+     disc behind it: the shape itself is the control. non-scaling-stroke keeps
+     the outline 2 px on screen despite the scale transform. */
+  s.appendChild(el('path', {d:SWAP_GLYPH,
+    fill:'var(--c-marker)', 'fill-rule':'nonzero',
+    stroke:'#ffffff', 'stroke-width':1.5, 'stroke-linejoin':'round',
+    'vector-effect':'non-scaling-stroke',
+    transform:'scale(0.74) translate(-32 -32)'}));
+  svg.appendChild(s);
+}
+
+/* Bus endpoints: plain blue circles with the label underneath. */
+function drawBusMarker(p, label, key){
+  /* No drag handle in a shared view. The transform is needed either way, so it
+     is merged in rather than living inside the branch. */
+  const g = el('g', Object.assign({transform:`translate(${p.x} ${p.y})`},
+    S.readonly ? {} : {class:'hit', 'data-marker':key}));
+  g.appendChild(el('circle', {cx:0, cy:0, r:19, fill:'transparent'}));
+  /* Deliberately larger than a chevron (5.5 half height) so the ends of the
+     line read as ends, not as another arrow in the band. */
+  g.appendChild(el('circle', {cx:0, cy:0, r:11, fill:'var(--c-marker)',
+    stroke:'#ffffff', 'stroke-width':2.5}));
+  const t = el('text', {x:0, y:26, 'text-anchor':'middle',
+    'font-family':'var(--font-sans)', 'font-size':11, 'font-weight':600,
+    'letter-spacing':'.03em',
+    fill:'#cfefff', stroke:'rgba(4,10,18,.85)', 'stroke-width':3.5,
+    'stroke-linejoin':'round', 'paint-order':'stroke fill'});
+  t.textContent = label;
+  g.appendChild(t);
+  svg.appendChild(g);
+}
+
+/* Landing marker. The group origin is the TIP, so the pin points at its exact
+   map position. Lighter blue than the raw theme primary, with a gradient body,
+   a white ring and a highlight so it reads as a crisp object rather than a
+   flat dark blob. */
+/* Landing pin. Dark outline and a dark core instead of the previous white ring
+   and white centre, which were the brightest thing on a black-and-blue map. */
+/* Landing pin: flat blue, no outline, and the hole in the head is genuinely
+   transparent rather than filled dark. The teardrop and the inner circle are
+   one compound path with fill-rule evenodd, so the circle punches through and
+   the map shows underneath. */
+function drawPin(p){
+  const g = el('g', Object.assign({transform:`translate(${p.x} ${p.y})`},
+    S.readonly ? {} : {class:'hit', 'data-marker':'target'}));
+  g.appendChild(el('rect', {x:-14, y:-36, width:28, height:40, fill:'transparent'}));
+  g.appendChild(el('path', {
+    d:'M0 0 C0 0 10 -12.5 10 -20 A10 10 0 1 0 -10 -20 C-10 -12.5 0 0 0 0 Z'
+      + ' M0 -24.2 A4.2 4.2 0 1 1 0 -15.8 A4.2 4.2 0 1 1 0 -24.2 Z',
+    'fill-rule':'evenodd', fill:'var(--c-marker)'}));
+  svg.appendChild(g);
+}
+
+function drawJump(p){
+  svg.appendChild(el('circle', {cx:p.x, cy:p.y, r:9, fill:'var(--c-jump)',
+    stroke:'#ffffff', 'stroke-width':2.5}));
+}
+
+function drawFlight(r, T){
+  const wExit = r.exitPos, wT = toWorld(S.markers.target), total = r.airDistance;
+  const ux = total > EPS ? (wT.x-wExit.x)/total : 0;
+  const uy = total > EPS ? (wT.y-wExit.y)/total : 0;
+  let acc = 0;
+  const segs = [];
+  for (const ph of r.air.phases){
+    const seg = Math.min(ph.distance, Math.max(0, total-acc));
+    const a = toScreen(fromWorld({x:wExit.x+ux*acc, y:wExit.y+uy*acc}));
+    acc += seg;
+    const b = toScreen(fromWorld({x:wExit.x+ux*acc, y:wExit.y+uy*acc}));
+    if (seg > 1e-6) segs.push({a, b, ph});
+  }
+  /* Weights and dash patterns follow the reference repo's flight polylines:
+     weight 3 at 0.8 opacity, the powered legs dashed and the glide solid. */
+  const DASH = {GLIDE_EARLY:null, DIVE:'10 8', GLIDE:null, FREEFALL:'8 6'};
+  for (const s of segs){
+    const a = {x1:s.a.x, y1:s.a.y, x2:s.b.x, y2:s.b.y, stroke:s.ph.color,
+      'stroke-width':3, 'stroke-linecap':'round', opacity:.9};
+    if (DASH[s.ph.mode]) a['stroke-dasharray'] = DASH[s.ph.mode];
+    svg.appendChild(el('line', a));
+  }
+  /* Phase transition markers, same radius as the jump dot. */
+  for (let i = 0; i < segs.length-1; i++)
+    svg.appendChild(el('circle', {cx:segs[i].b.x, cy:segs[i].b.y, r:7.5,
+      fill:segs[i+1].ph.color, stroke:'#ffffff', 'stroke-width':2}));
+
+  /* Glider markers. An instant pull gets TWO: where you pull off the bus, and
+     where the glider comes back out on its own at 100 m. Without the second
+     one the four-leg profile never said when the auto-deploy happens. */
+  const mark = (pt, text) => {
+    svg.appendChild(el('circle', {cx:pt.x, cy:pt.y, r:7.5,
+      fill:'var(--c-glide)', stroke:'#ffffff', 'stroke-width':2.5}));
+    const t = el('text', {x:pt.x, y:pt.y - 13, 'text-anchor':'middle',
+      'font-family':'var(--font-sans)', 'font-size':11, 'font-weight':600,
+      fill:'#d9ffe9', stroke:'rgba(4,10,18,.9)', 'stroke-width':3.5,
+      'stroke-linejoin':'round', 'paint-order':'stroke fill'});
+    t.textContent = text;
+    svg.appendChild(t);
+  };
+  /* The auto-deploy is always the start of the GLIDE leg. */
+  const autoSeg = segs.find(s => s.ph.mode === 'GLIDE');
+  if (r.air.earlyDeploy && segs.length) mark(segs[0].a, 'Pull insta');
+  if (autoSeg) mark(autoSeg.a, 'Auto deploy');
+}
+
+/* ======================= INTERACTION ======================= */
+const evPos = (e) => { const r = stage.getBoundingClientRect();
+  return {x:e.clientX-r.left, y:e.clientY-r.top}; };
+
+svg.addEventListener('pointerdown', (e) => {
+  if (S.readonly) return;
+  /* The swap control is checked first: it sits on the route line, so a marker
+     test would never reach it, and acting on pointerdown keeps it from being
+     read as the start of a pan. */
+  if (e.target.closest('[data-swap]')){
+    e.stopPropagation();
+    const a = S.markers.busStart;
+    S.markers.busStart = S.markers.busEnd;
+    S.markers.busEnd = a;
+    invalidate(); drawOverlay(); save();
+    return;
+  }
+  const g = e.target.closest('[data-marker]');
+  if (!g) return;
+  e.stopPropagation();
+  S.drag = g.getAttribute('data-marker');
+  try{ svg.setPointerCapture(e.pointerId); }catch(err){}
+});
+svg.addEventListener('pointermove', (e) => {
+  if (!S.drag) return;
+  e.stopPropagation();
+  const p = evPos(e), n = toNorm(p.x, p.y);
+  S.markers[S.drag] = {x:clamp(n.x,0,1), y:clamp(n.y,0,1)};
+  if (S.drag === 'target') applySnap();
+  invalidate(); drawOverlay();
+});
+const endMarkerDrag = () => { if (S.drag){ S.drag = null; save(); } };
+svg.addEventListener('pointerup', endMarkerDrag);
+svg.addEventListener('pointercancel', endMarkerDrag);
+
+const pointers = new Map();
+stage.addEventListener('pointerdown', (e) => {
+  cancelAnimationFrame(S.raf);
+  S.motion.vx = 0; S.motion.vy = 0;
+  pointers.set(e.pointerId, evPos(e));
+  if (pointers.size === 1){
+    const p = evPos(e);
+    S.pan = {x:p.x, y:p.y, vx:S.view.x, vy:S.view.y, lx:p.x, ly:p.y, moved:false};
+    stage.classList.add('panning');
+    try{ stage.setPointerCapture(e.pointerId); }catch(err){}
+  } else if (pointers.size === 2){
+    const [p1,p2] = [...pointers.values()];
+    S.pinch = {d:Math.hypot(p2.x-p1.x, p2.y-p1.y), k:S.view.k,
+      cx:(p1.x+p2.x)/2, cy:(p1.y+p2.y)/2, vx:S.view.x, vy:S.view.y};
+    S.pan = null;
+  }
+});
+stage.addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, evPos(e));
+  if (S.pinch && pointers.size >= 2){
+    const [p1,p2] = [...pointers.values()];
+    const d = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+    if (S.pinch.d > 4){
+      const k1 = clamp(S.pinch.k*(d/S.pinch.d), minZoom(), CONFIG.zoom.max);
+      S.view.x = S.pinch.cx - (S.pinch.cx - S.pinch.vx)*(k1/S.pinch.k);
+      S.view.y = S.pinch.cy - (S.pinch.cy - S.pinch.vy)*(k1/S.pinch.k);
+      S.view.k = k1;
+      hardClamp(); render();
+    }
+    return;
+  }
+  if (S.pan){
+    const p = evPos(e);
+    const b = bounds();
+    S.view.x = clamp(S.pan.vx + (p.x - S.pan.x), b.minX, b.maxX);
+    S.view.y = clamp(S.pan.vy + (p.y - S.pan.y), b.minY, b.maxY);
+    S.motion.vx = p.x - S.pan.lx; S.motion.vy = p.y - S.pan.ly;
+    S.pan.lx = p.x; S.pan.ly = p.y;
+    if (Math.hypot(p.x-S.pan.x, p.y-S.pan.y) > 3) S.pan.moved = true;
+    render();
+  }
+});
+function endStagePointer(e){
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2 && S.pinch){ S.pinch = null; settle(); }
+  if (pointers.size === 0){
+    if (S.pan && !S.pan.moved){
+      const p = evPos(e), n = toNorm(p.x, p.y);
+      if (n.x >= 0 && n.x <= 1 && n.y >= 0 && n.y <= 1){
+        S.markers.target = n; applySnap(); invalidate(); drawOverlay(); save();
+      }
+      S.motion.vx = 0; S.motion.vy = 0;
+    }
+    S.pan = null; stage.classList.remove('panning');
+    settle();
+  }
+}
+stage.addEventListener('pointerup', endStagePointer);
+stage.addEventListener('pointercancel', endStagePointer);
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const p = evPos(e);
+  zoomAt(p.x, p.y, Math.pow(CONFIG.zoom.wheel, -e.deltaY));
+}, {passive:false});
+
+/* One press is half a zoom level, matching the reference's Leaflet zoomDelta of
+   0.5, so the buttons step the same amount that one does. */
+const ZOOM_STEP = Math.SQRT2;
+$('btnZoomIn').onclick  = () => zoomAt(S.pane.w/2, S.pane.h/2, ZOOM_STEP);
+$('btnZoomOut').onclick = () => zoomAt(S.pane.w/2, S.pane.h/2, 1/ZOOM_STEP);
+
+/* ---- collapse the panel ---- */
+$('panelToggle').addEventListener('click', () => {
+  const p = $('panel'), open = !p.classList.toggle('collapsed');
+  const b = $('panelToggle');
+  b.setAttribute('aria-expanded', String(open));
+  b.setAttribute('aria-label', open ? 'Hide panel' : 'Show panel');
+  b.title = open ? 'Hide panel' : 'Show panel';
+});
+$('btnReset').onclick   = () => { cancelAnimationFrame(S.raf);
+  S.motion.vx = S.motion.vy = 0; resetView(); render(); };
+
+/* ======================= SNAP ======================= */
+function applySnap(){
+  /* POI coordinates are Battle Royale's world, and only Battle Royale's. On any
+     other island the nearest one would be a place that does not exist there, so
+     the island's own default ground height is used instead. It must not be zero:
+     see OG_TERRAIN_ELEVATION for what sea level was costing. */
+  if (!modeDef(S.mode).live){ S.elevation = mapFor(S.mode).elevation || 0; return; }
+  if (!S.transform || !S.pois.length) return;
+  const wT = toWorld(S.markers.target);
+  let best = null, bd = Infinity;
+  for (const p of S.pois){
+    const d = Math.hypot(wT.x - p.location.x/100, wT.y - p.location.y/100);
+    if (d < bd){ bd = d; best = p; }
+  }
+  if (best && bd <= CONFIG.snapRadius) S.elevation = best.location.z/100;
+}
+
+/* ======================= CALCULATE ======================= */
+function buildOpts(){
+  /* Everything except the wall offset comes straight from CONFIG. Nothing here
+     is user adjustable and nothing here is persisted, so a retuned constant
+     takes effect for everyone on the next refresh. */
+  return {
+    modes:modeSpeeds(S.mode), autoDeployAltitude:CONFIG.autoDeployAltitude,
+    minGlideTime:CONFIG.minGlideTime, landingRedeployTime:CONFIG.landingRedeployTime,
+    landingRedeployAltitude:CONFIG.landingRedeployAltitude,
+    allowEarlyDeploy:CONFIG.allowEarlyDeploy, busSpeed:CONFIG.busSpeed,
+    /* Whether the glider can be cut, and any speed this mode measured for
+       itself. Battle Royale supplies no overrides, so it gets CONFIG untouched. */
+    canCut:modeDef(S.mode).canCut !== false,
+    momentumTime:CONFIG.momentumTime, samples:CONFIG.samples,
+    busAltitude:CONFIG.busAltitude,
+    /* The wall offset is just terrain elevation expressed in a unit players
+       can actually judge, so it adds straight on top of the POI elevation. */
+    terrainElevation:S.elevation + wallsToMetres(S.wallOffset),
+    busStart:toWorld(S.markers.busStart), busEnd:toWorld(S.markers.busEnd),
+    target:toWorld(S.markers.target)
+  };
+}
+function calculate(){
+  S.result = solveRoute(buildOpts());
+  S.stale = false;
+  renderResults(); drawOverlay(); save();
+}
+/* Any input change marks the answer stale. The panel keeps its exact layout
+   and just dims, so nothing shifts or collapses; the map overlay drops the
+   flight path so no stale answer is shown there. Nothing recalculates. */
+function invalidate(){
+  if (S.result && !S.stale){
+    S.stale = true;
+    $('results').classList.add('stale');
+  }
+}
+
+/* ======================= RESULTS ======================= */
+const f1 = (v,n) => (v === undefined || v === null || !isFinite(v)) ? '0.0'
+  : v.toFixed(n === undefined ? 1 : n);
+const esc = (s) => String(s).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function renderResults(){
+  const box = $('results'), r = S.result;
+  box.classList.toggle('stale', !!S.stale);
+  if (!r){
+    box.innerHTML = '<div class="empty">Press Calculate to solve the drop.</div>';
+    return;
+  }
+  if (!r.ok){ box.innerHTML = failureHtml(r); return; }
+
+  let h = '<div class="stat-grid">';
+  h += stat('Jump at', 'T+'+f1(r.busTime,1), 's');
+  h += stat('Lands at', f1(r.total,1), 's');
+  h += stat('Air distance', f1(r.airDistance,0), 'm');
+  h += stat('Air time', f1(r.airTime,1), 's');
+  h += '</div>';
+
+  h += '<div style="margin-top:16px"><div class="section-label">Descent phases</div>';
+  h += '<div class="phase-list">';
+  for (const p of r.air.phases){
+    const zero = p.time < 0.05;
+    h += '<div class="phase'+(zero?' zero':'')+'">'
+      +  '<span class="dot" style="background:'+p.color+'"></span>'
+      +  '<span class="nm">'+esc(p.label)+'</span>'
+      +  '<span class="tm">'+f1(p.time,1)+'s</span></div>';
+  }
+  h += '</div></div>';
+
+  h += '<div class="note" style="margin-top:12px">'
+    +  (r.air.earlyDeploy
+        ? 'Too far to dive. Pull the glider <b>straight off the bus</b>, glide '
+          + '<b>'+f1(r.air.phases[0].time,1)+'s</b> down to <b>'
+          + f1(r.air.diveFromAltitude,0)+' m</b>, then drop back into a dive. '
+          + 'It auto-deploys again at <b>100 m</b>'
+        : 'Dive it. Glider auto-deploys at <b>100 m</b>')
+    /* OG has no cut, so the glider simply carries you in from the auto-deploy
+       and there is nothing to hold or re-open. */
+    +  (r.air.cut === false
+        ? ' and takes you the rest of the way in.'
+        : ': hold <b>'+f1(CONFIG.minGlideTime,1)+'s</b>, cut at <b>'
+          + f1(r.air.cutAltitude,0)+' m</b>, re-open at <b>~'
+          + f1(r.air.reopenAltitude,0)+' m</b> to land.')
+    +  '</div>';
+
+  box.innerHTML = h;
+}
+const stat = (k,v,u) => '<div class="stat"><div class="stat-k">'+k+'</div>'
+  + '<div class="stat-v">'+v+'<span class="u">'+u+'</span></div></div>';
+
+function failureHtml(r){
+  if (r.reason === 'out-of-range'){
+    return '<div class="note err"><b>Out of range.</b> No point on the bus route reaches '
+      + 'this spot. Closest approach <b>'+f1(r.closestApproach,0)+' m</b>, short by '
+      + '<b>'+f1(r.shortfall,0)+' m</b>.</div>'
+      + '<div class="note" style="margin-top:10px">Move the route closer, raise the drop '
+      + 'height, or pick a lower landing spot.</div>';
+  }
+  const msg = {
+    'degenerate-route':'Bus start and end are on top of each other. Move them apart.',
+    'no-altitude':'The landing spot is at or above the drop height.',
+    'no-bus-speed':'Bus speed must be above zero.',
+    'momentum-exceeds-altitude':'Bus momentum carry uses the whole drop. Lower it.'
+  }[r.reason] || ('Cannot solve: '+r.reason);
+  return '<div class="note err">'+msg+'</div>';
+}
+
+/* ======================= SAVED DROPS =======================
+   A saved drop is the whole setup, not just the landing spot: both bus markers,
+   the target and the wall offset. There is NO cap on how many you keep.
+
+   Folders are their own list rather than being inferred from the drops, so an
+   empty folder can exist to drag things into. A drop remembers its folder by
+   name; load() re-creates any folder a drop names but the folder list has lost,
+   so nothing can end up filed somewhere with no row to reach it.
+   ========================================================== */
+
+const folderOf = (d) => (d && typeof d.folder === 'string' ? d.folder.trim() : '');
+
+/* A saved drop is a spot on one particular island, so it belongs to the mode it
+   was saved in and is only listed there. Anything saved before modes existed is
+   Battle Royale, which is what it was. Showing them all together would offer to
+   load a Battle Royale pin onto the OG map, where it means nothing. */
+const modeOf = (d) => (d && typeof d.mode === 'string' && d.mode) || 'br';
+const dropsHere = () => S.drops.map((d,i) => [d,i]).filter(([d]) => modeOf(d) === S.mode);
+const CHEV = '<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" '
+  + 'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M9 6 L15 12 L9 18"/></svg>';
+
+function renderDrops(){
+  const list = $('dropList');
+  const here = dropsHere();
+  $('dropCount').textContent = String(here.length);
+
+  /* A folder that no longer exists cannot stay highlighted or collapsed. */
+  if (S.highlight && !S.folders.includes(S.highlight)) S.highlight = null;
+  S.collapsed = S.collapsed.filter(f => S.folders.includes(f));
+
+  if (!here.length && !S.folders.length){
+    list.innerHTML = '<div class="drops-empty">Nothing saved yet.</div>';
+    return;
+  }
+
+  const row = (i) => {
+    const d = S.drops[i];
+    return '<div class="drop-item" draggable="true" data-drag="'+i+'">'
+      + '<span class="grip" aria-hidden="true">'
+      + '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">'
+      + '<circle cx="2.5" cy="3" r="1.2"/><circle cx="7.5" cy="3" r="1.2"/>'
+      + '<circle cx="2.5" cy="7" r="1.2"/><circle cx="7.5" cy="7" r="1.2"/>'
+      + '<circle cx="2.5" cy="11" r="1.2"/><circle cx="7.5" cy="11" r="1.2"/></svg></span>'
+      + '<span class="nm" title="'+esc(d.name)+'">'+esc(d.name)+'</span>'
+      + '<button class="btn btn-ghost mini" data-ld="'+i+'">Load</button>'
+      + '<button class="drop-x" data-dl="'+i+'" title="Delete" aria-label="Delete '+esc(d.name)+'">'
+      + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+      + 'stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+      + '</button></div>';
+  };
+  const inFolder = (f) => here.filter(([d]) => folderOf(d) === f).map(([,i])=>i);
+
+  let html = '';
+  for (const f of S.folders){
+    const idxs = inFolder(f), on = S.highlight === f, shut = S.collapsed.includes(f);
+    html += '<div class="folder-row'+(on?' on':'')+'" data-zone="'+esc(f)+'">'
+      + '<button class="folder-chev'+(shut?' shut':'')+'" data-cl="'+esc(f)+'" '
+      + 'aria-expanded="'+(!shut)+'" title="'+(shut?'Expand':'Collapse')+'">'+CHEV+'</button>'
+      + '<button class="folder-name" data-fd="'+esc(f)+'" aria-pressed="'+on+'" '
+      + 'title="Show this folder\'s area on the map">'
+      + '<span class="nm">'+esc(f)+'</span></button>'
+      + '<span class="folder-n">'+idxs.length+'</span>'
+      + '<button class="drop-x" data-fx="'+esc(f)+'" title="Delete folder" '
+      + 'aria-label="Delete folder '+esc(f)+'">'
+      + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+      + 'stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+      + '</button></div>';
+    if (!shut){
+      html += '<div class="folder-kids" data-zone="'+esc(f)+'">'
+        + (idxs.length ? idxs.map(row).join('')
+                       : '<div class="drops-empty" style="padding:4px 0 6px">Drag drops in here.</div>')
+        + '</div>';
+    }
+  }
+  const loose = inFolder('');
+  html += '<div class="loose-zone" data-zone="">'
+    + (loose.length ? loose.map(row).join('')
+       : (S.folders.length ? '<div class="drops-empty" style="padding:4px 0">Drag here to remove from a folder.</div>' : ''))
+    + '</div>';
+  list.innerHTML = html;
+
+  list.querySelectorAll('[data-ld]').forEach(b => b.onclick = () => loadDrop(+b.dataset.ld));
+  list.querySelectorAll('[data-dl]').forEach(b => b.onclick = () => {
+    S.drops.splice(+b.dataset.dl, 1); renderDrops(); drawOverlay(); save();
+  });
+  list.querySelectorAll('[data-fd]').forEach(b => b.onclick = () => {
+    S.highlight = (S.highlight === b.dataset.fd) ? null : b.dataset.fd;
+    renderDrops(); drawOverlay();
+  });
+  list.querySelectorAll('[data-cl]').forEach(b => b.onclick = () => {
+    const f = b.dataset.cl;
+    S.collapsed = S.collapsed.includes(f) ? S.collapsed.filter(x => x !== f)
+                                          : S.collapsed.concat(f);
+    renderDrops();
+  });
+  /* Deleting a folder keeps its drops, they just come back out loose. */
+  list.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => {
+    const f = b.dataset.fx;
+    S.folders = S.folders.filter(x => x !== f);
+    S.drops.forEach(d => { if (folderOf(d) === f) d.folder = ''; });
+    renderDrops(); drawOverlay(); save();
+  });
+
+  wireDragDrop(list);
+}
+
+/* DRAG A DROP INTO A FOLDER.
+   Folder rows, their contents, and the loose area at the bottom are all drop
+   zones carrying the folder name in data-zone. Empty string is "no folder". */
+function wireDragDrop(list){
+  list.querySelectorAll('[data-drag]').forEach(item => {
+    item.addEventListener('dragstart', (e) => {
+      S.dragging = +item.dataset.drag;
+      item.classList.add('dragging');
+      try{ e.dataTransfer.setData('text/plain', item.dataset.drag); }catch(err){}
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      S.dragging = null;
+      list.querySelectorAll('.dragging,.drag-over')
+          .forEach(n => n.classList.remove('dragging','drag-over'));
+    });
+  });
+  list.querySelectorAll('[data-zone]').forEach(zone => {
+    zone.addEventListener('dragover', (e) => {
+      if (S.dragging === null) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+      zone.classList.add('drag-over');
+    });
+    zone.addEventListener('dragleave', (e) => {
+      if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-over');
+    });
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('drag-over');
+      const i = S.dragging !== null ? S.dragging : parseInt(e.dataTransfer.getData('text/plain'),10);
+      S.dragging = null;
+      if (!Number.isFinite(i) || !S.drops[i]) return;
+      S.drops[i].folder = zone.dataset.zone;
+      renderDrops(); drawOverlay(); save();
+    });
+  });
+}
+
+function addFolder(){
+  const f = ($('newFolder').value || '').trim();
+  if (!f) { $('newFolder').focus(); return; }
+  if (!S.folders.some(x => x.toLowerCase() === f.toLowerCase())) S.folders.push(f);
+  $('newFolder').value = '';
+  renderDrops(); save();
+}
+
+function saveDrop(){
+  const name = ($('dropName').value || '').trim();
+  if (!name){ $('dropName').focus(); return; }
+  /* Re-saving the same name overwrites rather than filling a second slot, and
+     keeps whichever folder it was already filed under. Scoped to this mode, so
+     the same name can name a spot on each island. */
+  const existing = S.drops.findIndex(d =>
+    d.name.toLowerCase() === name.toLowerCase() && modeOf(d) === S.mode);
+  const folder = existing >= 0 ? folderOf(S.drops[existing]) : '';
+  const entry = {
+    name, folder, mode:S.mode,
+    busStart:{...S.markers.busStart}, busEnd:{...S.markers.busEnd},
+    target:{...S.markers.target},
+    /* Elevation is not stored: it is re-derived from live POI data on load, so
+       a saved drop follows the map when the season changes. */
+    wallOffset:S.wallOffset
+  };
+  if (existing >= 0) S.drops[existing] = entry; else S.drops.push(entry);
+  $('dropName').value = '';
+  renderDrops(); drawOverlay(); save();
+}
+
+/* LOADING A DROP DOES NOT TOUCH THE BUS PATH.
+
+   The bus flies a different line every match, so the route is something you set
+   from the current game, not something a saved drop should overwrite. A saved
+   drop is the landing spot and the wall offset; loading one drops the pin on
+   your existing route so you can calculate straight away.
+
+   The bus markers are still written when saving, so the record stays complete
+   and old saves keep loading, they are just not applied here. */
+function loadDrop(i){
+  const d = S.drops[i];
+  if (!d) return;
+  S.markers.target = {...d.target};
+  S.wallOffset = typeof d.wallOffset === 'number' ? d.wallOffset : 0;
+  applySnap();                       // elevation follows the current map
+  syncWalls();
+  /* The target moved, so the old answer no longer describes anything and is
+     discarded outright: press Calculate again. */
+  S.result = null; S.stale = false;
+  renderResults(); drawOverlay(); save();
+}
+
+$('btnSaveDrop').addEventListener('click', saveDrop);
+$('dropName').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter'){ e.preventDefault(); saveDrop(); }
+});
+$('btnAddFolder').addEventListener('click', addFolder);
+$('newFolder').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter'){ e.preventDefault(); addFolder(); }
+});
+
+/* ======================= WALL HEIGHT OFFSET =======================
+   The only control on the page, and the only thing that is persisted besides
+   markers and saved drops. Drop height is fixed at CONFIG.busAltitude.
+   ================================================================== */
+const wallSlider = $('wallSlider');
+function syncWalls(){
+  const n = clamp(Math.round(S.wallOffset || 0), -CONFIG.wallRange, CONFIG.wallRange);
+  S.wallOffset = n;
+  wallSlider.value = n;
+  wallSlider.style.setProperty('--pct', ((n + CONFIG.wallRange)/(CONFIG.wallRange*2)*100)+'%');
+  /* The slider reading is the whole message: '+5 walls' already says which way
+     and by how much, so a sentence restating it in metres was noise. */
+  $('wallValue').textContent = (n > 0 ? '+' : '') + n + (Math.abs(n) === 1 ? ' wall' : ' walls');
+}
+wallSlider.addEventListener('input', () => {
+  S.wallOffset = parseInt(wallSlider.value, 10) || 0;
+  syncWalls(); invalidate(); drawOverlay(); save();
+});
+$('btnCalc').addEventListener('click', calculate);
+
+/* ======================= MAP IMAGE, SELF UPDATING =======================
+
+   The map ships embedded so the file works offline from file:// on day one.
+   On every load it also asks fortnite-api.com for the current blank map and
+   swaps it in when that succeeds, so a new season's island appears without
+   anyone rebuilding anything. Any failure (offline, DNS, 404, timeout) leaves
+   the embedded image in place and the tool carries on.
+
+   Nothing here reads the running game. It is a public metadata endpoint over
+   plain HTTPS: no overlay, no screen capture, no memory reading, no game files,
+   no traffic inspection, and no auto-detection of the bus route.
+
+   The canvas only ever draws this image, it never reads pixels back, so a
+   cross-origin map cannot break rendering even if the CORS headers change. */
+function setMapImage(src, onFail){
+  const img = new Image();
+  img.onload = () => {
+    if (!img.naturalWidth || !img.naturalHeight){ if (onFail) onFail(); return; }
+    S.img = img; S.imgW = img.naturalWidth; S.imgH = img.naturalHeight;
+    S.base = {w:0,h:0};
+    try{ makeAmbient(img); }catch(e){ S.ambient = null; }
+    layout(); render(); drawOverlay();
+  };
+  img.onerror = () => { if (onFail) onFail(); };
+  img.crossOrigin = 'anonymous';
+  img.src = src;
+}
+
+/* CACHE BUSTING, AND WHY THE REFRESH NEEDED IT.
+
+   The API serves the island from ONE static URL, /images/map.png, under
+   Cache-Control: public, max-age=31536000. A year. The JSON request above asks
+   for no-store so the metadata is always fresh, but the image is a plain
+   img.src, so a browser that already holds map.png will not ask for it again
+   and the refresh silently stops working the first time Epic changes the
+   island. It would look like it was working the whole time.
+
+   So the URL has to change when the content might have. Last-Modified cannot
+   do that job: it was watched moving from Aug 18 to Aug 20 inside a single
+   session while the bytes stayed md5-identical, because it tracks the CDN edge
+   and not the asset. Content-Length is honest but needs an extra round trip and
+   Vary: accept-encoding makes it wobble. Date.now() would re-download 2.6 MB on
+   every single load and throw away the point of embedding a map at all.
+
+   A UTC day bucket costs at most one extra fetch per browser per day and picks
+   a new island up within 24 hours of the API publishing it, which is far inside
+   the lag of the API itself. The embedded map still paints first, so nothing
+   waits on this and a failure still falls back. */
+/* THE EMBEDDED ISLAND CAN BE NEWER THAN THE API'S, AND USUALLY IS ON DAY ONE.
+
+   fortnite-api.com mirrors Epic rather than being Epic, and it lags: on the day
+   42.00 shipped it was still serving the 41.x island, hours after the season
+   went live, with its POI coordinates unchanged too. The embedded map was cut
+   from the current island directly, so on that day the live swap would have
+   pulled the OLD island back over the NEW one on every single load. The refresh
+   would have been actively making the map worse.
+
+   So the live image is only accepted once it stops being the asset we already
+   know we have superseded, identified by its exact byte count. A HEAD costs
+   nothing, Content-Length is CORS safelisted so it is readable cross-origin,
+   and the check clears itself permanently the moment the API publishes anything
+   different. When it does, this constant and the check can be deleted outright.
+
+   Any failure keeps the embedded map, which is the safe direction: the embedded
+   one is known good and known current, and a missed refresh costs a page load
+   rather than an island. */
+const SUPERSEDED_MAP_BYTES = 2613644;   // the 41.x island, byte for byte
+
+/* The whole decision, kept pure so it can be tested without a network. An
+   unreadable length is treated as superseded: unknown is not a reason to
+   overwrite a map cut by hand from the live island. */
+const isSupersededMap = (len) =>
+  !isFinite(len) || len === SUPERSEDED_MAP_BYTES;
+
+async function liveMapIsNotSuperseded(url){
+  try{
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), CONFIG.apiTimeoutMs) : null;
+    const res = await fetch(url, Object.assign(
+      {method:'HEAD', cache:'no-store'}, ctl ? {signal:ctl.signal} : {}));
+    if (timer) clearTimeout(timer);
+    if (!res.ok) return false;
+    return !isSupersededMap(parseInt(res.headers.get('content-length'), 10));
+  }catch(e){ return false; }
+}
+
+const dayStamp = () => new Date().toISOString().slice(0, 10);
+const bustCache = (url) =>
+  url + (url.includes('?') ? '&' : '?') + 'v=' + dayStamp();
+
+/* The live island once the API has answered, so switching OG and back does not
+   throw away this season's map and drop to the embedded one. */
+let liveMapImage = null;
+
+/* Point the canvas AND the coordinate system at the current mode's island. The
+   two always move together: a mode showing one island while measuring against
+   another is wrong in a way nothing downstream could detect. */
+function applyMapForMode(){
+  S.transform = mapFor(S.mode).transform;
+  const live = modeDef(S.mode).live && liveMapImage;
+  applySnap();
+  setMapImage(live || mapFor(S.mode).image,
+    () => { if (live) setMapImage(mapFor(S.mode).image, () => {}); });
+}
+
+async function loadApi(){
+  try{
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), CONFIG.apiTimeoutMs) : null;
+    const res = await fetch(CONFIG.apiUrl,
+      Object.assign({cache:'no-store'}, ctl ? {signal:ctl.signal} : {}));
+    if (timer) clearTimeout(timer);
+    if (!res.ok) throw new Error('http '+res.status);
+    const d = (await res.json() || {}).data;
+    if (!d) throw new Error('bad payload');
+
+    /* POIs give the landing elevation, and they change every season, so they are
+       always taken live when available. */
+    const pois = (d.pois||[]).filter(p => p && p.location &&
+      isFinite(p.location.x) && isFinite(p.location.y) && isFinite(p.location.z));
+    /* A shared view is showing an answer that was already worked out, so the
+       POIs must not re-snap the elevation or mark it stale. Without this guard
+       the shared drop rendered correctly and then blanked a moment later when
+       this request came back, which is exactly what it looked like. */
+    if (pois.length){
+      S.pois = pois;
+      if (!S.readonly){ applySnap(); invalidate(); }
+    }
+
+    /* The endpoint serves the current Battle Royale island and nothing else, so
+       it is remembered either way but only swapped in while a mode that actually
+       flies over that island is selected. Coming back from OG picks it up. */
+    if (d.images && d.images.blank){
+      const url = bustCache(d.images.blank);
+      if (await liveMapIsNotSuperseded(url)){
+        liveMapImage = url;
+        if (modeDef(S.mode).live)
+          setMapImage(liveMapImage, () => { liveMapImage = null; });
+      }
+    }
+  }catch(e){ /* offline or the API moved: the embedded map is already up */ }
+}
+
+/* ======================= MODE ======================= */
+const modeDef = (id) => CONFIG.modes_ui.find(m => m.id === id) || CONFIG.modes_ui[0];
+
+/* The flight speeds a mode actually flies: CONFIG.modes, with that mode's own
+   measurements shallow-merged over the top. A mode with no `speeds` gets CONFIG
+   byte for byte, which is how Battle Royale stays exactly where it was measured
+   no matter what another mode later finds out about the glider. */
+const modeSpeeds = (id) => {
+  const over = modeDef(id).speeds;
+  return over ? Object.assign({}, CONFIG.modes, over) : CONFIG.modes;
+};
+
+const TICK = '<svg class="dd-check" viewBox="0 0 24 24" width="13" height="13" '
+  + 'aria-hidden="true"><path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" '
+  + 'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function renderModes(){
+  $('modeBtnText').textContent = modeDef(S.mode).label;
+  $('modeList').innerHTML = CONFIG.modes_ui.map(m =>
+    '<button class="dd-opt" role="option" data-mode="'+m.id+'"'
+    + ' aria-selected="'+(m.id === S.mode)+'"'
+    + (m.ready ? '' : ' aria-disabled="true"') + '>'
+    + '<span>'+esc(m.label)+'</span>'
+    + (m.ready ? TICK : '<span class="dd-tag">soon</span>')
+    + '</button>').join('');
+  $('modeList').querySelectorAll('[data-mode]').forEach(b => {
+    b.onclick = () => {
+      if (b.getAttribute('aria-disabled') === 'true') return;
+      setMode(b.dataset.mode);
+      closeModes(true);
+    };
+  });
+}
+
+/* ---- the popup ---- */
+function openModes(){
+  const list = $('modeList'), btn = $('modeBtn');
+  const r = btn.getBoundingClientRect();
+  list.style.left = r.left + 'px';
+  list.style.width = r.width + 'px';
+  /* Flip above the button when there is not room below it. */
+  const below = window.innerHeight - r.bottom;
+  list.classList.add('open');
+  const h = list.offsetHeight;
+  if (below < h + 12 && r.top > h + 12){
+    list.style.top = (r.top - h - 6) + 'px';
+  } else {
+    list.style.top = (r.bottom + 6) + 'px';
+  }
+  btn.setAttribute('aria-expanded', 'true');
+  const cur = list.querySelector('[aria-selected="true"]');
+  if (cur) cur.classList.add('active');
+}
+function closeModes(focusBtn){
+  const list = $('modeList');
+  list.classList.remove('open');
+  list.querySelectorAll('.active').forEach(n => n.classList.remove('active'));
+  $('modeBtn').setAttribute('aria-expanded', 'false');
+  if (focusBtn) $('modeBtn').focus();
+}
+const modesOpen = () => $('modeList').classList.contains('open');
+
+$('modeBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  modesOpen() ? closeModes(false) : openModes();
+});
+/* Anything that would move the button underneath the list just closes it,
+   which is simpler and steadier than tracking it. */
+document.addEventListener('click', () => { if (modesOpen()) closeModes(false); });
+window.addEventListener('resize', () => { if (modesOpen()) closeModes(false); });
+document.querySelector('.panel-body')
+  .addEventListener('scroll', () => { if (modesOpen()) closeModes(false); }, true);
+$('modeList').addEventListener('click', (e) => e.stopPropagation());
+
+$('modeBtn').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown'){
+    e.preventDefault();
+    if (!modesOpen()) openModes();
+    else moveMode(1);
+  }
+});
+function moveMode(step){
+  const opts = [...$('modeList').querySelectorAll('[data-mode]')]
+    .filter(o => o.getAttribute('aria-disabled') !== 'true');
+  if (!opts.length) return;
+  const cur = opts.findIndex(o => o.classList.contains('active'));
+  opts.forEach(o => o.classList.remove('active'));
+  const next = opts[(cur + step + opts.length) % opts.length] || opts[0];
+  next.classList.add('active');
+  next.scrollIntoView({block:'nearest'});
+}
+window.addEventListener('keydown', (e) => {
+  if (!modesOpen()) return;
+  if (e.key === 'Escape'){ e.preventDefault(); closeModes(true); }
+  else if (e.key === 'ArrowDown'){ e.preventDefault(); moveMode(1); }
+  else if (e.key === 'ArrowUp'){ e.preventDefault(); moveMode(-1); }
+  else if (e.key === 'Enter'){
+    e.preventDefault();
+    const a = $('modeList').querySelector('.active');
+    if (a){ setMode(a.dataset.mode); closeModes(true); }
+  }
+});
+
+/* NO EXPLANATORY TEXT IN THE UI. Standing instruction from the user, given more
+   than once: the panel states values, never sentences about them. Caveats about
+   the model live in these comments and in HANDOFF.md, where whoever is working
+   on it will read them, and never on screen where the player has to. The
+   provisional flag on a transform is still real and still meaningful, it just
+   does not get to talk. */
+
+function setMode(id){
+  const m = modeDef(id);
+  if (!m.ready) return;                 // greyed rows are not selectable
+  if (m.id === S.mode) return;
+  S.mode = m.id;
+  /* Both the ending and the island change, so any answer worked out under the
+     old mode describes nothing now. */
+  S.result = null; S.stale = false;
+  applyMapForMode();
+  renderModes(); renderDrops(); renderResults(); drawOverlay(); save();
+}
+
+/* ======================= SHARING =======================
+
+   Two ways to send a drop to someone, both entirely client side so this works
+   on a static host with no backend at all.
+
+   IMAGE: renders the map and the overlay into one PNG, framed on the action
+   rather than the whole island. Discord embeds a PNG inline, which is why this
+   is the one people will actually use.
+
+   LINK: the whole answer is packed into the URL fragment. The fragment never
+   leaves the browser (it is not sent to the server), and the read-only page
+   contains no solver, so the person you send it to can look but cannot move a
+   marker or work out a different drop.
+
+   THE FIVE MINUTE EXPIRY IS COSMETIC, and worth being straight about: the
+   payload is in the link, so anyone who edits the timestamp can keep viewing
+   it. Making it genuinely expire needs a server to hold the data and hand out
+   short ids. Nothing here pretends otherwise.
+   ====================================================== */
+const SHARE_TTL_MS = 5*60*1000;
+const b64u = {
+  enc: (s) => btoa(unescape(encodeURIComponent(s)))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''),
+  dec: (s) => decodeURIComponent(escape(atob(
+    s.replace(/-/g,'+').replace(/_/g,'/'))))
+};
+const r4 = (v) => Math.round(v*1e4)/1e4;
+const r0 = (v) => Math.round(v);
+
+/* Packed as a positional array, not an object, to keep the link short. */
+function encodeShare(){
+  const r = S.result;
+  if (!r || !r.ok) return null;
+  const m = S.markers;
+  return b64u.enc(JSON.stringify([
+    1, Date.now(),
+    [r4(m.busStart.x), r4(m.busStart.y)],
+    [r4(m.busEnd.x),   r4(m.busEnd.y)],
+    [r4(m.target.x),   r4(m.target.y)],
+    S.wallOffset,
+    [r0(r.jumpPos.x), r0(r.jumpPos.y)],
+    [r0(r.exitPos.x), r0(r.exitPos.y)],
+    r0(r.airDistance), r4(r.busTime), r4(r.total), r4(r.airTime),
+    r.air.earlyDeploy ? 1 : 0,
+    r0(r.air.diveFromAltitude || 0), r0(r.air.cutAltitude), r0(r.air.reopenAltitude),
+    r.air.phases.map(p => [p.mode, r4(p.time), r0(p.distance), r0(p.altitude)]),
+    S.mode
+  ]));
+}
+
+/* Rebuilds an object the existing draw and render code already understands, so
+   the shared view is drawn by exactly the same code as the live one. */
+function decodeShare(str){
+  try{
+    const a = JSON.parse(b64u.dec(str));
+    if (!Array.isArray(a) || a[0] !== 1) return null;
+    const age = Date.now() - a[1];
+    const pt = (p) => ({x:p[0], y:p[1]});
+    const modeOf = (m) => (m === 'GLIDE_EARLY' ? CONFIG.modes.GLIDE : CONFIG.modes[m]);
+    return {
+      age, expired: age > SHARE_TTL_MS,
+      mode: (typeof a[17] === 'string' && a[17]) || 'br',
+      markers:{busStart:pt(a[2]), busEnd:pt(a[3]), target:pt(a[4])},
+      wallOffset: a[5],
+      result:{
+        ok:true, jumpPos:pt(a[6]), exitPos:pt(a[7]),
+        airDistance:a[8], busTime:a[9], total:a[10], airTime:a[11],
+        air:{
+          earlyDeploy: !!a[12], diveFromAltitude:a[13],
+          cut: (a[17] || 'br') === 'br',
+          cutAltitude:a[14], reopenAltitude:a[15],
+          phases: a[16].map(p => ({
+            mode:p[0], label:modeOf(p[0]).label, color:modeOf(p[0]).color,
+            time:p[1], distance:p[2], altitude:p[3]
+          }))
+        }
+      }
+    };
+  }catch(e){ return null; }
+}
+
+function shareHint(msg){
+  const h = $('shareHint');
+  h.textContent = msg; h.style.display = msg ? '' : 'none';
+  clearTimeout(shareHint._t);
+  if (msg) shareHint._t = setTimeout(() => { h.style.display = 'none'; }, 4000);
+}
+
+async function shareLink(){
+  const code = encodeShare();
+  if (!code){ shareHint('Press Calculate first.'); return; }
+  const url = location.origin + location.pathname + '#s=' + code;
+  try{
+    await navigator.clipboard.writeText(url);
+    shareHint('Link copied. It shows the drop read only for 5 minutes.');
+  }catch(e){
+    /* Clipboard is blocked on file:// in some browsers, so fall back to
+       something the user can copy by hand rather than failing silently. */
+    prompt('Copy this link:', url);
+  }
+}
+
+/* ---- IMAGE ----
+   Framed on the jump point, the flight and the landing, with padding, so the
+   picture shows the part that matters rather than the whole island. */
+const IMG_W = 1200, IMG_H = 900, IMG_PAD = 0.75, IMG_MIN_SPAN = 0.10;
+
+function shareFraming(r){
+  const pts = [fromWorld(r.jumpPos), fromWorld(r.exitPos), S.markers.target];
+  let x0 = Math.min(...pts.map(p=>p.x)), x1 = Math.max(...pts.map(p=>p.x));
+  let y0 = Math.min(...pts.map(p=>p.y)), y1 = Math.max(...pts.map(p=>p.y));
+  const cx = (x0+x1)/2, cy = (y0+y1)/2;
+  let w = Math.max(x1-x0, IMG_MIN_SPAN) * (1+IMG_PAD);
+  let h = Math.max(y1-y0, IMG_MIN_SPAN) * (1+IMG_PAD);
+  /* Match the output aspect so nothing is squashed. */
+  const ar = (IMG_W/IMG_H) * (S.imgH/S.imgW);
+  if (w/h < ar) w = h*ar; else h = w/ar;
+  return {x0:cx-w/2, y0:cy-h/2, w, h};
+}
+
+/* The overlay is drawn by the live code, so the export has to borrow the view
+   for one synchronous pass and hand it straight back. */
+function overlaySVGFor(fr){
+  const keep = {view:{...S.view}, pane:{...S.pane}, base:{...S.base},
+                w:svg.getAttribute('width'), h:svg.getAttribute('height'),
+                vb:svg.getAttribute('viewBox')};
+  S.pane = {w:IMG_W, h:IMG_H};
+  S.base = {w:IMG_W/fr.w, h:IMG_H/fr.h};
+  S.view = {k:1, x:-fr.x0*S.base.w, y:-fr.y0*S.base.h};
+  svg.setAttribute('width', IMG_W); svg.setAttribute('height', IMG_H);
+  svg.setAttribute('viewBox', '0 0 '+IMG_W+' '+IMG_H);
+  drawOverlay();
+  let out = new XMLSerializer().serializeToString(svg);
+  /* An SVG rasterised as an image has no stylesheet, so every var() has to be
+     resolved to a literal.
+
+     THE SUBSTITUTED VALUE MUST BE XML ESCAPED. This runs after the serializer,
+     so anything inserted here is going straight into a double quoted attribute
+     without being escaped for us. --font-sans is `"Geist",ui-sans-serif,...`,
+     and dropping those raw quotes in produced font-family=""Geist",...", which
+     is malformed XML. The image then failed to decode and the export silently
+     wrote out a map with no overlay on it, at a perfectly healthy file size. */
+  const cs = getComputedStyle(document.documentElement);
+  const xml = (v) => v.replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+                      .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  out = out.replace(/var\((--[a-z-]+)\)/g,
+    (_, v) => xml((cs.getPropertyValue(v) || '#ffffff').trim()));
+  S.view = keep.view; S.pane = keep.pane; S.base = keep.base;
+  svg.setAttribute('width', keep.w); svg.setAttribute('height', keep.h);
+  svg.setAttribute('viewBox', keep.vb);
+  drawOverlay();
+  return out;
+}
+
+async function shareImage(){
+  const r = S.result;
+  if (!r || !r.ok){ shareHint('Press Calculate first.'); return; }
+  if (!S.img){ shareHint('Map still loading.'); return; }
+  shareHint('Building image...');
+  const fr = shareFraming(r);
+
+  const c = document.createElement('canvas');
+  c.width = IMG_W; c.height = IMG_H;
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.fillStyle = '#0a0a0a'; g.fillRect(0,0,IMG_W,IMG_H);
+  g.drawImage(S.img, fr.x0*S.imgW, fr.y0*S.imgH, fr.w*S.imgW, fr.h*S.imgH,
+              0, 0, IMG_W, IMG_H);
+
+  const svgText = overlaySVGFor(fr);      // synchronous, view already restored
+
+  await new Promise((res) => {
+    const im = new Image();
+    im.onload = () => { g.drawImage(im, 0, 0, IMG_W, IMG_H); res(); };
+    im.onerror = res;
+    im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText);
+  });
+
+  const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+  if (!blob){ shareHint('Could not build the image.'); return; }
+
+  /* Clipboard first, so it can go straight into Discord with one paste.
+     ClipboardItem needs a secure context, which file:// is not in some browsers,
+     so each fallback below is a real possibility rather than dead code. */
+  if (navigator.clipboard && window.ClipboardItem){
+    try{
+      await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+      shareHint('Image copied. Paste it into Discord.');
+      return;
+    }catch(e){ /* fall through */ }
+  }
+  const file = new File([blob], 'drop.png', {type:'image/png'});
+  if (navigator.canShare && navigator.canShare({files:[file]})){
+    try{ await navigator.share({files:[file]}); shareHint(''); return; }catch(e){}
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'drop.png';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  shareHint('Clipboard blocked here, so the image was saved instead.');
+}
+
+/* ---- READ ONLY ---- */
+function enterShared(sh){
+  S.readonly = true;
+  document.body.classList.add('shared');
+  S.markers = sh.markers;
+  S.wallOffset = sh.wallOffset;
+  /* The island travels with the link: a shared OG drop has to open on the OG
+     map, or the pin lands somewhere that means nothing. */
+  if (sh.mode) { S.mode = sh.mode; applyMapForMode(); renderModes(); }
+  S.result = sh.result; S.stale = false;
+  $('panel').classList.remove('collapsed');
+  syncWalls();
+  renderResults();
+  /* The countdown lives in the panel subtitle, so the shared view adds no extra
+     furniture to the page. */
+  const sub = document.querySelector('.panel-sub');
+  const tick = () => {
+    /* sh.age is how old the link already was when it was opened. */
+    const ms = SHARE_TTL_MS - sh.age - (Date.now() - S.sharedAt);
+    if (ms <= 0){
+      sub.textContent = 'Shared drop, expired';
+      S.result = null; renderResults(); drawOverlay();
+      clearInterval(S.shareTimer);
+      return;
+    }
+    const s = Math.ceil(ms/1000);
+    sub.textContent = 'Shared drop, read only. ' + Math.floor(s/60) + ':'
+      + String(s%60).padStart(2,'0') + ' left';
+  };
+  S.sharedAt = Date.now();
+  tick();
+  S.shareTimer = setInterval(tick, 1000);
+}
+
+$('btnShareImg').addEventListener('click', shareImage);
+$('btnShareLink').addEventListener('click', shareLink);
+
+/* ======================= INIT ======================= */
+window.addEventListener('resize', () => { layout(); render(); });
+if (window.ResizeObserver) new ResizeObserver(() => { layout(); render(); }).observe(stage);
+
+/* A shared link takes over completely: the visitor's own saved drops and
+   markers are left untouched in storage, they just are not what is shown. */
+const shared = /^#s=/.test(location.hash) ? decodeShare(location.hash.slice(3)) : null;
+
+if (!shared) load();
+renderModes();
+syncWalls();
+renderDrops();
+renderResults();
+applyMapForMode();                 // stored mode picks its own island
+layout(); render();
+loadApi();
+
+if (shared){
+  if (shared.expired){
+    document.body.classList.add('shared');
+    document.querySelector('.panel-sub').textContent = 'Shared drop, expired';
+  } else {
+    enterShared(shared);
+  }
+  layout(); render(); drawOverlay();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # No dependencies to install. The whole project is plain node and one
+      # HTML file on purpose, so this is the entire pipeline.
+      - name: Build and run all three suites
+        run: npm test

@@ -1,0 +1,22 @@
+{
+  "name": "fortnite-dropcalc",
+  "version": "1.0.0",
+  "description": "A drop solver for Fortnite, built on flight constants measured in game rather than copied off the web.",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fwsoapy/fortnite-dropcalc.git"
+  },
+  "scripts": {
+    "build": "node build.js",
+    "test": "node build.js && node test.js && node simulate.js && node test-persist.js",
+    "test:unit": "node test.js",
+    "test:sim": "node simulate.js",
+    "test:persist": "node test-persist.js",
+    "refresh-map": "node tools/refresh_map.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

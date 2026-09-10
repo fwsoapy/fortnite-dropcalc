@@ -1,0 +1,25 @@
+name: release
+
+# Tag a version and the built page gets attached to the release, so anyone can
+# download one file and run it offline without installing node.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build and test
+        run: npm test
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: drop-solver.html
+          generate_release_notes: true
