@@ -2,7 +2,7 @@ name: publish to github pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 # Pages needs these; the default GITHUB_TOKEN is read-only.
@@ -43,7 +43,11 @@ jobs:
           cp drop-solver.html _site/drop-solver.html
           touch _site/.nojekyll
 
+      # enablement turns Pages on for the repo the first time this runs, so
+      # there is no settings page to visit before the first deploy.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
