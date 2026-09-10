@@ -468,8 +468,10 @@ console.log('\n' + '='.repeat(74) + '\n  modes and per-island saved drops\n' + '
   /* Everything that touches fortnite-api.com is gated on this flag, so a mode
      that is not Battle Royale can never be handed its island or its POIs. */
   ok('only Battle Royale is marked live', byId('br').live === true && !byId('og').live);
-  ok('the two placeholders stay unselectable',
-     ['reload','blitz'].every(id => byId(id).ready === false));
+  ok('the placeholder stays unselectable', byId('reload').ready === false);
+  /* Blitz was removed from the picker outright, the way Ballistic was, rather
+     than left greyed out. Reload is the only coming-soon row. */
+  ok('Blitz is gone from the picker', byId('blitz') === undefined);
   /* Ballistic was removed from the picker outright, not just greyed out. */
   ok('Ballistic is gone from the picker', byId('ballistic') === undefined);
 
@@ -672,11 +674,11 @@ console.log('\n' + '='.repeat(74) + '\n  game modes\n' + '='.repeat(74));
 {
   const C = makeEnv(undefined).CONFIG;
   const ids = C.modes_ui.map(m => m.id);
-  ok('four rows in the picker: ' + ids.join(', '), C.modes_ui.length === 4);
+  ok('three rows in the picker: ' + ids.join(', '), C.modes_ui.length === 3);
   ok('Battle Royale and OG are selectable',
      C.modes_ui.filter(m => m.ready).map(m=>m.id).join(',') === 'br,og');
-  ok('the other two are greyed out',
-     C.modes_ui.filter(m => !m.ready).length === 2);
+  ok('Reload is the only greyed row',
+     C.modes_ui.filter(m => !m.ready).map(m=>m.id).join(',') === 'reload');
   ok('Battle Royale can cut the glider', C.modes_ui[0].canCut === true);
   ok('OG cannot', C.modes_ui[1].canCut === false);
   /* Placeholders must not carry physics: a mode with no measured map would

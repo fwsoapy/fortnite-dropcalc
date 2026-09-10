@@ -523,8 +523,8 @@ Object.assign(CONFIG, {
      is gated on `live` so an OG session can never be handed Battle Royale
      coordinates or the Battle Royale island.
 
-     The three greyed rows are deliberate placeholders, not stubs to fill in on
-     a whim: each needs its own map and its own measured transform. */
+     The greyed row is a deliberate placeholder, not a stub to fill in on a
+     whim: it needs its own map and its own measured transform. */
   modes_ui:[
     {id:'br', label:'Battle Royale', canCut:true,  ready:true, live:true},
     /* GLIDE_OG, AND BOTH ITS NUMBERS ARE NOW MEASURED IN OG.
@@ -567,8 +567,7 @@ Object.assign(CONFIG, {
        no room left in it. See OG_TERRAIN_ELEVATION. */
     {id:'og', label:'OG',            canCut:false, ready:true,
      speeds:{GLIDE:{id:'GLIDE', label:'Glide', vh:15.0, vv:5.0, color:'#00c758'}}},
-    {id:'reload',   label:'Reload',    ready:false},
-    {id:'blitz',    label:'Blitz',     ready:false}
+    {id:'reload',   label:'Reload',    ready:false}
   ],
   /* v5: nothing but markers, saved drops and the wall offset is stored now, so
      no physics constant can ever go stale in a browser again. The bump also
