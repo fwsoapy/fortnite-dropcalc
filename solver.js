@@ -346,15 +346,18 @@ function solveDescent(cfg, H, d) {
      those two glides into one row hid the fact that there are two of them, so
      they are kept distinct: GLIDE_EARLY is the instant pull, GLIDE is always
      the auto-deploy window. Four rows on an instant pull, three otherwise. */
+  /* `color` is carried through untouched. The solver has no opinion about it,
+     but the page draws each phase's leg and its row dot from the phase object,
+     so dropping it here leaves the flight path and the phase dots unpainted. */
   const P = {
-    GLIDE_EARLY: { mode:'GLIDE_EARLY', label:GLIDE.label, altitude:hGlideEarly,
-                   time:tGlideEarly, distance:dGlideEarly },
-    DIVE:        { mode:'DIVE',        label:DIVE.label,  altitude:hDive,
-                   time:tDive,  distance:dDive },
-    GLIDE:       { mode:'GLIDE',       label:GLIDE.label, altitude:hGlideLate,
-                   time:tGlideLate, distance:dGlideLate },
-    FREEFALL:    { mode:'FREEFALL',    label:FREEFALL.label, altitude:hFree,
-                   time:tFree,  distance:dFree }
+    GLIDE_EARLY: { mode:'GLIDE_EARLY', label:GLIDE.label, color:GLIDE.color,
+                   altitude:hGlideEarly, time:tGlideEarly, distance:dGlideEarly },
+    DIVE:        { mode:'DIVE',        label:DIVE.label,  color:DIVE.color,
+                   altitude:hDive, time:tDive,  distance:dDive },
+    GLIDE:       { mode:'GLIDE',       label:GLIDE.label, color:GLIDE.color,
+                   altitude:hGlideLate, time:tGlideLate, distance:dGlideLate },
+    FREEFALL:    { mode:'FREEFALL',    label:FREEFALL.label, color:FREEFALL.color,
+                   altitude:hFree, time:tFree,  distance:dFree }
   };
   /* No freefall row at all when the glider cannot be cut: there is no such
      phase in that mode, and showing it at 0.0s would imply one exists. */

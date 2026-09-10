@@ -972,6 +972,46 @@ head('degenerate inputs rejected');
 }
 
 console.log('\n' + '='.repeat(78));
+console.log('  phases carry their colour through to the page');
+console.log('='.repeat(78));
+{
+  /* The page draws each phase's leg on the map and the dot on its row straight
+     from `phase.color`. The solver has no opinion about the value, it just has
+     to pass it along. It did not, once: the phase objects were built with
+     `label` but not `color`, so the flight path and every phase dot rendered
+     unpainted while every number on the panel stayed correct. Nothing that
+     compared times or text could see it. */
+  const tinted = JSON.parse(JSON.stringify(S.CONFIG.modes));
+  tinted.DIVE.color = '#ff6467';
+  tinted.GLIDE.color = '#00c758';
+  tinted.FREEFALL.color = '#f99c00';
+  const want = { GLIDE_EARLY:'#00c758', DIVE:'#ff6467', GLIDE:'#00c758', FREEFALL:'#f99c00' };
+
+  const cfg = { ...S.CONFIG, modes: tinted };
+  /* A short drop is dive-then-glide, a long one pulls the glider instantly and
+     adds GLIDE_EARLY, so between them every phase the page can draw is built. */
+  for (const [what, d] of [['a plain drop', 600], ['an instant pull', 2400]]) {
+    const phases = S.solveDescent(cfg, 830, d).phases;
+    for (const p of phases)
+      ok(what + ': ' + p.mode + ' carries its colour', p.color === want[p.mode],
+         'got ' + p.color + ', want ' + want[p.mode]);
+  }
+
+  /* Through the route solver too, which builds its own cfg and has dropped
+     fields on the way past before. */
+  const air = S.solveRoute({ busStart:{x:0,y:0}, busEnd:{x:5000,y:0}, target:{x:2000,y:600},
+    busAltitude:830, modes:tinted }).air;
+  ok('solveRoute keeps the colours', air.phases.every(p => p.color === want[p.mode]));
+
+  /* A mode overriding a speed brings its own colour with it, the way OG does. */
+  const og = JSON.parse(JSON.stringify(tinted));
+  og.GLIDE = { ...og.GLIDE, vh:15.0, vv:5.0, color:'#123456' };
+  const ogPhases = S.solveDescent({ ...S.CONFIG, modes:og, canCut:false }, 830, 600).phases;
+  ok("an overriding mode's colour is the one used",
+     ogPhases.filter(p => p.mode.startsWith('GLIDE')).every(p => p.color === '#123456'));
+}
+
+console.log('\n' + '='.repeat(78));
 console.log(`  ${pass} passed, ${fail} failed`);
 console.log('='.repeat(78));
 process.exit(fail ? 1 : 0);
