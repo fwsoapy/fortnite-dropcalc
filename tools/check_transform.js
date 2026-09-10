@@ -22,6 +22,16 @@
  * island re-rendered at different bounds, not to detect a POI moving. Tighten
  * them against a few real runs: every run prints the measured values, so the
  * workflow log is the record of what normal looks like.
+ *
+ * First real reading, 2026-09-10, against the live API, for reference:
+ *
+ *   pois 40
+ *   x  min 0.1059  max 0.7282  span 0.6223  centroid 0.4244
+ *   y  min 0.1807  max 0.8631  span 0.6824  centroid 0.5391
+ *   implied POI extent 1928 m across
+ *
+ * One season is not a range. POI count and spread move every season, so do not
+ * tighten toward those numbers on the strength of a single run.
  */
 'use strict';
 
