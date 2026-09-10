@@ -73,3 +73,14 @@ landmarks, so 13 inliers is the expected maximum, not a shortfall.
 
 After changing the constant, run `test-persist.js`: it re-checks six POIs against
 their measured label pixels and will fail if the transform drifts.
+
+---
+
+## Checking the transform without re-measuring it
+
+`node tools/check_transform.js` answers the cheaper question: does the
+transform currently in `template.html` still fit the live island? It pulls the
+POIs from the API, projects them, and complains if they stop landing where an
+island's worth of POIs should. Exit 0 fits, 1 drifted, 2 could not check.
+
+It runs weekly in CI. When it fires, that is the signal to run the steps above.

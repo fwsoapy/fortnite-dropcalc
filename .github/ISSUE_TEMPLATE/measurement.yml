@@ -1,0 +1,61 @@
+name: I measured something in game
+description: A stopwatch reading that confirms, corrects or settles one of the constants.
+title: "measurement: "
+labels: ["measurement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most useful thing anyone can send. Every constant in the
+        tool comes from one person's stopwatch, and a couple of them cannot be
+        settled without a second person's.
+
+        The open one worth the most is **bus speed**. Time the bus between two
+        points a known distance apart and it closes a fork that has been open
+        since the start.
+
+        You do not need to be precise to be useful. Say what you actually saw.
+  - type: dropdown
+    id: what
+    attributes:
+      label: What did you measure?
+      options:
+        - Bus speed between two known points
+        - Straight down, bus to auto-deploy
+        - Auto-deploy to the ground
+        - Max dive distance, never pulling early
+        - Max reach, pulling the glider instantly
+        - A race, two players, one bus
+        - Map scale, HUD distance between two POIs
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which mode?
+      options: ["Battle Royale", "OG", "Other"]
+    validations:
+      required: true
+  - type: textarea
+    id: reading
+    attributes:
+      label: What you got
+      description: The number, its units, and how you timed it.
+      placeholder: |
+        13.2 seconds, phone stopwatch, started on the jump and stopped when the
+        glider opened. Dropped straight down from the bus over flat ground.
+    validations:
+      required: true
+  - type: textarea
+    id: conditions
+    attributes:
+      label: Conditions
+      description: >
+        Anything that changes what the number means: drop height, terrain under
+        the landing spot, whether you touched the glider, how many runs you did
+        and how much they varied.
+  - type: textarea
+    id: tool
+    attributes:
+      label: What the tool said, if you compared

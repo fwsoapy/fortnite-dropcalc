@@ -130,6 +130,16 @@ CI runs the same `npm test` on every push. Pushing to `main` also builds the
 page and publishes it to GitHub Pages, and tagging `v*` attaches it to a
 release.
 
+A fourth check runs weekly on a schedule rather than on a push:
+`tools/check_transform.js` pulls the live POIs and projects them through
+`MAP_TRANSFORM` to confirm it still fits the island. That is the one failure
+mode here that yields a confident wrong answer rather than an error, since the
+page would keep reporting distances against bounds that had moved. It needs the
+network, so it is deliberately kept out of `npm test`, and an unreachable API
+warns rather than fails. Its thresholds are loose on purpose: it is an alarm for
+a re-rendered island, not a measurement. Every run prints the numbers it saw, so
+the workflow log is the record of what normal looks like.
+
 ---
 
 ### The map is rebuilt, not just downloaded
