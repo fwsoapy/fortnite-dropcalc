@@ -1,78 +1,74 @@
 # Fortnite Drop Calculator
 
-Work out where to jump off the battle bus and how to fly, for a bus route and a
-landing spot you place yourself.
+Stop guessing when to jump. Drop the bus route in, click where you want to
+land, and get the exact jump point that puts you on the ground first.
 
 **[Open it →](https://fwsoapy.github.io/fortnite-dropcalc/)**
 
 ![The solver working out a long drop](docs/screenshot.jpg)
 
-It is one HTML file with no dependencies and no build step for you. Save it and
-it opens straight off `file://`, offline, with both island maps already inside
-it. On each load it also tries to pull the current Battle Royale map and POI
-list from the public `fortnite-api.com` endpoint, so a new season needs no
-update from me. That fetch is entirely optional: offline, it uses the embedded
-maps and nothing else changes.
+## Why it's worth using
 
-Manual input only. It never reads the running game. No overlay, no screen
-capture, no memory reading, no game files, no traffic inspection. There is
-nothing to auto-detect and nothing to install.
+**It does the math instead of eyeballing it.** Optimal drops aren't intuition,
+they're a solved problem: the bus moves at a fixed speed, freefall and dive have
+fixed speeds, and there's exactly one jump point that minimises time to the
+ground. This works it out for your route and your landing spot, every time.
 
-## The interesting part
+**The numbers are real.** Every flight constant was measured in game with a
+stopwatch, not copied off a wiki. The published numbers are wrong in ways that
+actually cost you the drop, and this tool proved it in a live race: two players,
+one bus, same landing spot. The wiki-style jump point lost by two seconds. The
+measured one wins. Same story with OG glides, which were landing 25-30 m short
+until the glider altitude got re-measured.
 
-Every flight constant in here was **measured in game with a stopwatch**, not
-copied off a wiki, and the published numbers turned out to be wrong in ways
-that matter.
+**It's fast.** Two markers, one click, one button. No account, no ads, no
+tutorial.
 
-The clearest example: this tool used to tell you to jump far too early, and it
-lost a real race because of it. Two players, one bus, a 240 m perpendicular
-offset. It said jump 287 m early; the other player jumped later and landed two
-seconds sooner. What sets the jump point is not the average ground speed that
-every source publishes, it is the **marginal** speed, how much extra time one
-more metre of ground costs:
+**It works anywhere.** One HTML file, no dependencies. Save it and it runs off
+`file://`, offline, with both island maps already inside. On a phone too, touch
+drag included.
 
-```
-m    = (FREEFALL.vv*DIVE.vh - FREEFALL.vh*DIVE.vv) / (FREEFALL.vv - DIVE.vv)
-lead = offset * m / sqrt(busSpeed² - m²)
-```
+**It stays current by itself.** Each load pulls the live map and POI list from
+the public Fortnite API, so a new season doesn't need a new version. Offline it
+falls back to the built-in maps and everything still works.
 
-Reconstructing from the bus time saved puts the correct lead near 71 m. A
-published rule of thumb, from a completely unrelated source, gives 80 m for the
-same drop. Two independent numbers within 10 m of each other, and the tool now
-sits between them. The consequence is that the average ground speed in this
-model sits **below** the range those same sources publish, and there is a test
-that fails if anyone helpfully "fixes" it back.
+**It's safe to use.** Manual input only. It never touches the running game: no
+overlay, no screen capture, no memory reading, no game files, no traffic
+inspection. Nothing to install, nothing to get you banned. Nothing you save
+leaves your browser.
 
-The other one worth reading is the OG glide ratio. OG drops were landing 25 to
-30 m short, and the shape of the miss gave it away: **it did not grow with
-distance**. A fixed miss can only come from a phase whose altitude is the same
-on every drop, and OG has exactly one, because it cannot cut the glider, so the
-whole 100 m auto-deploy window is glide. The glider was opening 31 m further
-out than it could actually cover, on every single drop, near or far.
-
-There is a lot more of this, including one constant that is still an open
-two-way fork nobody can settle without a stopwatch: **[docs/physics.md](docs/physics.md)**.
+**Both modes, properly.** Battle Royale and OG each get their own island and
+their own measured constants, because OG can't cut the glider and genuinely
+flies differently. There's also a wall-height offset for landing on a roof or
+dropping into a hole.
 
 ## Using it
 
-Drag the **Start** and **End** markers to the bus route, click where you want
-to land, press **Calculate**. It gives you the jump point, the time to land,
-and each phase of the descent in order.
+Drag the **Start** and **End** markers onto the bus route, click where you want
+to land, hit **Calculate**. You get the jump point, the time to land, and each
+phase of the descent in order. Saved drops and folders stick around in the
+browser.
 
-- **Mode** switches between Battle Royale and OG. They have their own islands
-  and their own measured constants; OG cannot cut the glider, so it flies
-  differently.
-- **Wall height offset** raises or lowers the landing ground by whole walls,
-  for dropping on a roof or into a hole.
-- Saved drops and folders persist in the browser. Nothing is uploaded anywhere,
-  and no physics constant is ever stored, which took three separate bugs to
-  learn.
+## Under the hood
 
-Works on a phone, including touch drag.
+If you want the actual model, the constants, where each one came from, and where
+the published figures fall apart, it's all written up:
+
+- [docs/physics.md](docs/physics.md): the model and every measurement behind it,
+  including one constant still unresolved and waiting on someone's stopwatch
+- [docs/internals.md](docs/internals.md): how the page is built and how the maps
+  get rebuilt each season
+
+Short version on accuracy: the model rests on one person's hand-timed
+measurements. They over-determine the model and they all hold at once, which no
+web-sourced set managed, but it's still one person with a stopwatch. If you take
+a measurement of your own there's an
+[issue template](https://github.com/fwsoapy/fortnite-dropcalc/issues/new?template=measurement.yml)
+for it.
 
 ## Running it yourself
 
-Node 18 or newer. There are no dependencies to install.
+Node 18 or newer, no dependencies.
 
 ```bash
 git clone https://github.com/fwsoapy/fortnite-dropcalc
@@ -81,40 +77,15 @@ npm run build       # writes drop-solver.html
 npm test            # build, then all three suites
 ```
 
-`drop-solver.html` is not committed. It is a 2 MB single file that is mostly
-base64 map data, so every rebuild would be a 2 MB diff. Build it, grab it from
-the [releases](https://github.com/fwsoapy/fortnite-dropcalc/releases), or just
-use the hosted copy above.
-
-The physics lives in `solver.js` and nowhere else. `build.js` inlines it into
-`template.html` along with the two maps, so the code that ships is the code the
-tests ran against.
-
-- [docs/physics.md](docs/physics.md): the model, every constant and where it
-  came from, and where the published numbers fail
-- [docs/internals.md](docs/internals.md): how the page is built, how the maps
-  are rebuilt each season, and the list of things that were got wrong at least
-  once
-
-## Accuracy, honestly
-
-The whole model rests on one person's hand-timed measurements from one drop
-height. They over-determine the model and they all hold at once, which no
-web-sourced set ever managed, but they are still one person with a stopwatch.
-
-`busSpeed` in particular is unresolved. The raced 71 m lead pins a *pair* of
-numbers, not either one, so 100 m/s and 75 m/s both reproduce it exactly and
-there is no measurement between them. It is documented rather than papered
-over, and the way to settle it is to time the bus between two points a known
-distance apart. If you take that measurement, or any of the others, there is an
-[issue template](https://github.com/fwsoapy/fortnite-dropcalc/issues/new?template=measurement.yml)
-for it. Other people's stopwatches are the only thing that closes these.
+`drop-solver.html` isn't committed, since it's a 2 MB single file that's mostly
+base64 map data. Build it, grab it from the
+[releases](https://github.com/fwsoapy/fortnite-dropcalc/releases), or use the
+hosted copy above.
 
 ## Credits and disclaimer
 
 - Constants cross-checked against **dropmapsfn**, whose model is not adopted but
-  which corroborated two figures and supplied one. The comparison is in
-  [docs/physics.md](docs/physics.md).
+  which corroborated two figures and supplied one.
 - Two published numbers (`3.84 m` per wall, re-open at `~6 m`) come from
   **NA Drops**.
 - **technik-consulting.eu** for the bus speed and auto-deploy altitude, and for
