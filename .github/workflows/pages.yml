@@ -41,6 +41,8 @@ jobs:
           # Also keep it under its real name so a direct link to it still works
           # and so people can save a copy to run offline.
           cp drop-solver.html _site/drop-solver.html
+          # The picture link previews (Discord, X, ...) show.
+          cp docs/og.jpg _site/og.jpg
           touch _site/.nojekyll
 
       # This needs Pages set to "GitHub Actions" as its source, under
